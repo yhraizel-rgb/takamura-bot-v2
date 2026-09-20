@@ -34,8 +34,8 @@ process.on("unhandledRejection", (reason) => {
 //  CONFIGURATION INTERNE (pas de .env, tout est ici)
 // ════════════════════════════════════════════════════════════════
 
-// ⚠️ Remplace par ton vrai token Telegram (BotFather).
-const TELEGRAM_BOT_TOKEN = "REPLACE_WITH_YOUR_TELEGRAM_BOT_TOKEN";
+// Token Telegram (BotFather) — reste exclusivement ici, jamais exposé au frontend ni dans les logs.
+const TELEGRAM_BOT_TOKEN = "8788156145:AAENvMXJCFktb7pgcx_Htig2bgSpeoJ4-js";
 
 // ⚠️ Chat ID numérique du groupe officiel (PAS le lien d'invitation).
 // Pour l'obtenir : ajoute ton bot comme admin du groupe, poste un message
