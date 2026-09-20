@@ -1,0 +1,47 @@
+{
+  "name": "takamura-bot",
+  "version": "2.0.0",
+  "description": "TAKAMURA BOT V2 - Plateforme WhatsApp multi-session + Telegram Gateway",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "author": "Samy",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc14",
+    "awesome-phonenumber": "^7.8.0",
+    "axios": "^1.7.9",
+    "bluebird": "^3.7.2",
+    "buffer": "^6.0.3",
+    "chalk": "^6.0.0",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.6.2",
+    "ffmpeg-static": "^5.2.0",
+    "fluent-ffmpeg": "^2.1.3",
+    "form-data": "^4.0.6",
+    "fs-extra": "^11.4.0",
+    "google-it": "^1.6.4",
+    "gtts": "^0.2.1",
+    "helmet": "^8.2.0",
+    "image-to-base64": "^2.2.0",
+    "jsdom": "^30.0.1",
+    "mime-types": "^3.0.2",
+    "moment-timezone": "^0.6.3",
+    "node-fetch": "^3.3.2",
+    "pino": "^10.3.1",
+    "pino-pretty": "^13.1.3",
+    "play-dl": "^1.9.7",
+    "qrcode": "^1.5.4",
+    "wa-sticker-formatter": "^4.4.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}

@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Takamura Bot — Dashboard</title>
+<style>
+  :root{
+    --bg:#0a0b10;
+    --bg-elev:#12141c;
+    --bg-card:#161923;
+    --border:#242838;
+    --text:#e7e9f2;
+    --text-dim:#8b90a3;
+    --accent:#7c5cff;
+    --accent-2:#22d3ee;
+    --green:#22c55e;
+    --yellow:#eab308;
+    --red:#ef4444;
+    --blue:#3b82f6;
+    --radius:14px;
+    --shadow:0 8px 30px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:
+      radial-gradient(1200px 600px at 90% -10%, rgba(124,92,255,.15), transparent 60%),
+      radial-gradient(900px 500px at 0% 0%, rgba(34,211,238,.1), transparent 60%),
+      var(--bg);
+    color:var(--text);
+    min-height:100%;
+  }
+  a{color:inherit;}
+  ::-webkit-scrollbar{width:8px;height:8px;}
+  ::-webkit-scrollbar-thumb{background:#2a2f42;border-radius:8px;}
+
+  .app{display:flex;min-height:100vh;}
+
+  /* Sidebar */
+  .sidebar{
+    width:250px;flex-shrink:0;
+    background:linear-gradient(180deg, rgba(22,25,35,.9), rgba(18,20,28,.9));
+    border-right:1px solid var(--border);
+    padding:20px 14px;
+    position:fixed;top:0;bottom:0;left:0;
+    transform:translateX(0);
+    transition:transform .25s ease;
+    z-index:50;
+    overflow-y:auto;
+  }
+  .brand{display:flex;align-items:center;gap:10px;padding:6px 8px 22px;}
+  .brand .logo{
+    width:36px;height:36px;border-radius:10px;
+    background:linear-gradient(135deg,var(--accent),var(--accent-2));
+    display:flex;align-items:center;justify-content:center;font-size:18px;
+  }
+  .brand .name{font-weight:700;font-size:15px;letter-spacing:.3px;}
+  .brand .tag{font-size:11px;color:var(--text-dim);}
+
+  .nav{display:flex;flex-direction:column;gap:2px;}
+  .nav-item{
+    display:flex;align-items:center;gap:10px;
+    padding:10px 12px;border-radius:10px;
+    color:var(--text-dim);font-size:14px;cursor:pointer;
+    border:1px solid transparent;
+    user-select:none;
+  }
+  .nav-item:hover{background:rgba(255,255,255,.04);color:var(--text);}
+  .nav-item.active{
+    background:rgba(124,92,255,.12);
+    border-color:rgba(124,92,255,.35);
+    color:#fff;
+  }
+  .nav-item .ic{width:18px;text-align:center;}
+
+  .sidebar-footer{position:absolute;bottom:16px;left:14px;right:14px;font-size:11px;color:var(--text-dim);}
+
+  /* Main */
+  .main{flex:1;margin-left:250px;min-width:0;}
+  .topbar{
+    position:sticky;top:0;z-index:30;
+    display:flex;align-items:center;justify-content:space-between;
+    padding:14px 22px;
+    background:rgba(10,11,16,.75);backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--border);
+  }
+  .topbar h1{font-size:16px;margin:0;font-weight:600;}
+  .topbar .right{display:flex;align-items:center;gap:10px;}
+  .menu-toggle{display:none;background:none;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:8px 10px;cursor:pointer;}
+
+  .content{padding:22px;max-width:1200px;}
+
+  .section{display:none;animation:fade .25s ease;}
+  .section.active{display:block;}
+  @keyframes fade{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:translateY(0);}}
+
+  /* Cards / grid */
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:22px;}
+  .card{
+    background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);
+    padding:16px 18px;box-shadow:var(--shadow);
+  }
+  .card .label{font-size:12px;color:var(--text-dim);margin-bottom:6px;}
+  .card .value{font-size:24px;font-weight:700;}
+  .card .value.small{font-size:16px;}
+
+  .panel{
+    background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);
+    padding:20px;margin-bottom:20px;box-shadow:var(--shadow);
+  }
+  .panel h2{margin:0 0 14px;font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px;}
+  .panel .desc{color:var(--text-dim);font-size:13px;margin-bottom:14px;}
+
+  /* Buttons */
+  .btn{
+    display:inline-flex;align-items:center;gap:6px;
+    background:linear-gradient(135deg,var(--accent),#6a4bff);
+    color:#fff;border:none;border-radius:10px;
+    padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;
+    transition:transform .12s ease, filter .12s ease;
+  }
+  .btn:hover{filter:brightness(1.08);}
+  .btn:active{transform:scale(.98);}
+  .btn.secondary{background:rgba(255,255,255,.06);border:1px solid var(--border);}
+  .btn.danger{background:linear-gradient(135deg,#ef4444,#b91c1c);}
+  .btn.ghost{background:transparent;border:1px solid var(--border);color:var(--text-dim);}
+  .btn:disabled{opacity:.5;cursor:not-allowed;}
+  .btn.sm{padding:6px 10px;font-size:12px;border-radius:8px;}
+
+  input[type=text], input[type=number], select{
+    background:var(--bg-elev);border:1px solid var(--border);color:var(--text);
+    padding:10px 12px;border-radius:10px;font-size:13px;width:100%;
+  }
+  label{font-size:12px;color:var(--text-dim);display:block;margin-bottom:6px;}
+
+  /* Badges */
+  .badge{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:600;}
+  .badge.green{background:rgba(34,197,94,.15);color:#4ade80;}
+  .badge.red{background:rgba(239,68,68,.15);color:#f87171;}
+  .badge.yellow{background:rgba(234,179,8,.15);color:#facc15;}
+  .badge.gray{background:rgba(255,255,255,.08);color:var(--text-dim);}
+  .dot{width:7px;height:7px;border-radius:50%;display:inline-block;}
+  .dot.green{background:#22c55e;}
+  .dot.red{background:#ef4444;}
+  .dot.yellow{background:#eab308;}
+
+  /* Table -> cards on mobile */
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th{text-align:left;color:var(--text-dim);font-weight:600;padding:10px;border-bottom:1px solid var(--border);}
+  td{padding:10px;border-bottom:1px solid var(--border);}
+  tr:last-child td{border-bottom:none;}
+  .empty{text-align:center;color:var(--text-dim);padding:30px 10px;font-size:13px;}
+
+  .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);gap:12px;flex-wrap:wrap;}
+  .toggle-row:last-child{border-bottom:none;}
+  .toggle-row .meta{font-size:13px;}
+  .toggle-row .meta .sub{font-size:11px;color:var(--text-dim);}
+  .switch{position:relative;width:42px;height:24px;flex-shrink:0;}
+  .switch input{opacity:0;width:0;height:0;}
+  .slider{position:absolute;cursor:pointer;inset:0;background:#2a2f42;border-radius:999px;transition:.2s;}
+  .slider:before{content:"";position:absolute;height:18px;width:18px;left:3px;top:3px;background:white;border-radius:50%;transition:.2s;}
+  input:checked + .slider{background:linear-gradient(135deg,var(--accent),var(--accent-2));}
+  input:checked + .slider:before{transform:translateX(18px);}
+
+  .action-select{width:110px;}
+
+  /* Pairing */
+  .pair-box{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;}
+  .pair-box .field{flex:1;min-width:180px;}
+  .code-display{
+    margin-top:16px;padding:18px;border:1px dashed var(--accent);border-radius:12px;
+    background:rgba(124,92,255,.08);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+  }
+  .code-display .code{font-size:24px;font-weight:700;letter-spacing:2px;color:var(--accent-2);}
+
+  /* Logs */
+  .log-filters{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;}
+  .log-line{display:flex;gap:10px;padding:8px 10px;border-bottom:1px solid var(--border);font-size:12px;font-family:ui-monospace,Menlo,Consolas,monospace;}
+  .log-line:last-child{border-bottom:none;}
+  .log-line .ts{color:var(--text-dim);white-space:nowrap;}
+  .log-line .plat{color:var(--accent-2);white-space:nowrap;}
+
+  /* Toasts */
+  .toasts{position:fixed;bottom:18px;right:18px;display:flex;flex-direction:column;gap:10px;z-index:200;max-width:320px;}
+  .toast{
+    background:var(--bg-elev);border:1px solid var(--border);border-radius:10px;
+    padding:12px 14px;font-size:13px;box-shadow:var(--shadow);
+    animation:slideIn .2s ease;
+  }
+  .toast.success{border-color:rgba(34,197,94,.4);}
+  .toast.error{border-color:rgba(239,68,68,.4);}
+  .toast.warning{border-color:rgba(234,179,8,.4);}
+  @keyframes slideIn{from{opacity:0;transform:translateX(30px);}to{opacity:1;transform:translateX(0);}}
+
+  /* Modal */
+  .modal-overlay{
+    position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(2px);
+    display:none;align-items:center;justify-content:center;z-index:150;
+  }
+  .modal-overlay.show{display:flex;}
+  .modal{
+    background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);
+    padding:22px;max-width:380px;width:90%;box-shadow:var(--shadow);
+  }
+  .modal h3{margin:0 0 10px;font-size:15px;}
+  .modal p{color:var(--text-dim);font-size:13px;margin-bottom:18px;}
+  .modal .actions{display:flex;justify-content:flex-end;gap:10px;}
+
+  .overlay-scrim{
+    position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:40;display:none;
+  }
+  .overlay-scrim.show{display:block;}
+
+  @media (prefers-reduced-motion: reduce){
+    *{animation:none !important;transition:none !important;}
+  }
+
+  @media (max-width: 860px){
+    .sidebar{transform:translateX(-100%);}
+    .sidebar.open{transform:translateX(0);}
+    .main{margin-left:0;}
+    .menu-toggle{display:inline-flex;}
+    table thead{display:none;}
+    table, tbody, tr, td{display:block;width:100%;}
+    tr{border:1px solid var(--border);border-radius:12px;margin-bottom:10px;padding:8px 4px;background:var(--bg-elev);}
+    td{border:none;display:flex;justify-content:space-between;gap:10px;padding:6px 10px;}
+    td:before{content:attr(data-label);color:var(--text-dim);font-size:11px;}
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <div class="overlay-scrim" id="scrim"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="logo">🐉</div>
+      <div>
+        <div class="name">Takamura Bot</div>
+        <div class="tag">V2 · Dashboard</div>
+      </div>
+    </div>
+    <nav class="nav" id="nav">
+      <div class="nav-item active" data-target="dashboard"><span class="ic">📊</span> Dashboard</div>
+      <div class="nav-item" data-target="sessions"><span class="ic">📱</span> Sessions WhatsApp</div>
+      <div class="nav-item" data-target="pairing"><span class="ic">🔗</span> Pairing</div>
+      <div class="nav-item" data-target="protections"><span class="ic">🛡️</span> Protections</div>
+      <div class="nav-item" data-target="telegram"><span class="ic">✈️</span> Telegram</div>
+      <div class="nav-item" data-target="logs"><span class="ic">🧾</span> Logs</div>
+      <div class="nav-item" data-target="about"><span class="ic">ℹ️</span> À propos</div>
+    </nav>
+    <div class="sidebar-footer">Takamura Bot V2 — plateforme WhatsApp + Telegram</div>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button class="menu-toggle" id="menuToggle">☰</button>
+        <h1 id="pageTitle">Dashboard</h1>
+      </div>
+      <div class="right">
+        <button class="btn secondary sm" id="refreshBtn">⟳ Actualiser</button>
+      </div>
+    </div>
+
+    <div class="content">
+
+      <!-- DASHBOARD -->
+      <section class="section active" id="sec-dashboard">
+        <div class="grid" id="statsGrid">
+          <div class="card"><div class="label">Chargement…</div><div class="value small">—</div></div>
+        </div>
+        <div class="panel">
+          <h2>🟢 Live status</h2>
+          <div class="desc">État en temps réel de chaque session WhatsApp.</div>
+          <div id="liveStatusList"><div class="empty">Chargement…</div></div>
+        </div>
+      </section>
+
+      <!-- SESSIONS -->
+      <section class="section" id="sec-sessions">
+        <div class="panel">
+          <h2>📱 Sessions WhatsApp</h2>
+          <div class="desc">Une session par numéro connecté. Chaque erreur est isolée : une session ne peut jamais en bloquer une autre.</div>
+          <div style="overflow-x:auto;">
+            <table id="sessionsTable">
+              <thead><tr><th>Numéro</th><th>Statut</th><th>Uptime</th><th>Messages</th><th>Groupes</th><th>Commandes</th><th>Actions</th></tr></thead>
+              <tbody><tr><td colspan="7" class="empty">Chargement…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- PAIRING -->
+      <section class="section" id="sec-pairing">
+        <div class="panel">
+          <h2>🔗 Pairing</h2>
+          <div class="desc">Saisis un numéro WhatsApp au format international (sans + ni espaces) pour générer un code de jumelage.</div>
+          <div class="pair-box">
+            <div class="field">
+              <label>Numéro WhatsApp</label>
+              <input type="text" id="pairNumber" placeholder="ex: 237690000000" />
+            </div>
+            <button class="btn" id="pairBtn">Générer le code</button>
+          </div>
+          <div id="pairResult"></div>
+        </div>
+      </section>
+
+      <!-- PROTECTIONS -->
+      <section class="section" id="sec-protections">
+        <div class="panel">
+          <h2>🛡️ Protections</h2>
+          <div class="desc">Configuration réelle appliquée sur les événements WhatsApp entrants (messages.upsert). Sélectionne une session.</div>
+          <div style="max-width:320px;margin-bottom:16px;">
+            <label>Session</label>
+            <select id="protSessionSelect"><option value="">— Choisir une session —</option></select>
+          </div>
+          <div id="protectionsBody"><div class="empty">Sélectionne une session connectée pour configurer ses protections.</div></div>
+        </div>
+      </section>
+
+      <!-- TELEGRAM -->
+      <section class="section" id="sec-telegram">
+        <div class="panel">
+          <h2>✈️ Telegram Gateway</h2>
+          <div class="desc">Statut réel du bot Telegram (polling, membership, commandes).</div>
+          <div class="grid" id="telegramGrid">
+            <div class="card"><div class="label">Chargement…</div><div class="value small">—</div></div>
+          </div>
+          <button class="btn secondary" id="tgTestBtn">Tester la connexion</button>
+        </div>
+      </section>
+
+      <!-- LOGS -->
+      <section class="section" id="sec-logs">
+        <div class="panel">
+          <h2>🧾 Logs</h2>
+          <div class="log-filters">
+            <select id="logSeverity">
+              <option value="all">Toutes sévérités</option>
+              <option value="info">Info</option>
+              <option value="success">Succès</option>
+              <option value="warning">Warning</option>
+              <option value="error">Erreur</option>
+            </select>
+            <select id="logPlatform">
+              <option value="all">Toutes plateformes</option>
+              <option value="whatsapp">WhatsApp</option>
+              <option value="telegram">Telegram</option>
+              <option value="system">Système</option>
+            </select>
+            <button class="btn secondary sm" id="logRefreshBtn">Rafraîchir</button>
+          </div>
+          <div id="logsList"><div class="empty">Chargement…</div></div>
+        </div>
+      </section>
+
+      <!-- ABOUT -->
+      <section class="section" id="sec-about">
+        <div class="panel">
+          <h2>ℹ️ À propos</h2>
+          <p style="color:var(--text-dim);font-size:13px;line-height:1.7;">
+            Takamura Bot V2 est une plateforme unifiée WhatsApp (multi-session, via Baileys) et Telegram
+            (gateway avec vérification d'appartenance au groupe officiel), livrée volontairement en trois
+            fichiers : <code>index.html</code>, <code>index.js</code>, <code>package.json</code>.
+            Toutes les statistiques affichées dans ce dashboard proviennent de l'API backend en temps réel —
+            aucune donnée n'est simulée.
+          </p>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <h3 id="modalTitle">Confirmer</h3>
+    <p id="modalText">Es-tu sûr ?</p>
+    <div class="actions">
+      <button class="btn secondary" id="modalCancel">Annuler</button>
+      <button class="btn danger" id="modalConfirm">Confirmer</button>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<script>
+(function(){
+  "use strict";
+
+  // ── Navigation ──────────────────────────────────────────────
+  const navItems = document.querySelectorAll(".nav-item");
+  const sections = document.querySelectorAll(".section");
+  const pageTitle = document.getElementById("pageTitle");
+  const sidebar = document.getElementById("sidebar");
+  const scrim = document.getElementById("scrim");
+
+  navItems.forEach(item => {
+    item.addEventListener("click", () => {
+      navItems.forEach(i => i.classList.remove("active"));
+      item.classList.add("active");
+      const target = item.dataset.target;
+      sections.forEach(s => s.classList.toggle("active", s.id === "sec-" + target));
+      pageTitle.textContent = item.textContent.trim();
+      closeSidebar();
+      loadSection(target);
+    });
+  });
+
+  document.getElementById("menuToggle").addEventListener("click", () => {
+    sidebar.classList.add("open");
+    scrim.classList.add("show");
+  });
+  function closeSidebar(){ sidebar.classList.remove("open"); scrim.classList.remove("show"); }
+  scrim.addEventListener("click", closeSidebar);
+
+  // ── Toasts ──────────────────────────────────────────────────
+  function toast(message, type){
+    type = type || "info";
+    const el = document.createElement("div");
+    el.className = "toast " + type;
+    el.textContent = message;
+    document.getElementById("toasts").appendChild(el);
+    setTimeout(() => el.remove(), 4000);
+  }
+
+  // ── Modal ───────────────────────────────────────────────────
+  const modalOverlay = document.getElementById("modalOverlay");
+  const modalTitle = document.getElementById("modalTitle");
+  const modalText = document.getElementById("modalText");
+  const modalConfirm = document.getElementById("modalConfirm");
+  const modalCancel = document.getElementById("modalCancel");
+  function confirmAction(title, text, onConfirm){
+    modalTitle.textContent = title;
+    modalText.textContent = text;
+    modalOverlay.classList.add("show");
+    const handler = () => {
+      modalOverlay.classList.remove("show");
+      modalConfirm.removeEventListener("click", handler);
+      onConfirm();
+    };
+    modalConfirm.addEventListener("click", handler);
+  }
+  modalCancel.addEventListener("click", () => modalOverlay.classList.remove("show"));
+
+  // ── API helper ──────────────────────────────────────────────
+  async function api(path, opts){
+    try{
+      const res = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" } }, opts || {}));
+      const json = await res.json().catch(() => null);
+      if (!res.ok || (json && json.success === false)){
+        const msg = json?.error?.message || "Erreur serveur";
+        throw new Error(msg);
+      }
+      return json;
+    } catch(e){
+      toast(e.message || "Erreur réseau", "error");
+      throw e;
+    }
+  }
+
+  function fmtUptime(ms){
+    if (!ms || ms < 1000) return "—";
+    const s = Math.floor(ms/1000);
+    const h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
+    return h + "h " + m + "m";
+  }
+
+  // ── Dashboard ───────────────────────────────────────────────
+  async function loadDashboard(){
+    try{
+      const { data } = await api("/api/stats");
+      const grid = document.getElementById("statsGrid");
+      grid.innerHTML = [
+        ["Sessions actives", data.activeSessions],
+        ["Connectées", data.connectedSessions],
+        ["Déconnectées", data.disconnectedSessions],
+        ["Messages traités", data.messagesProcessed],
+        ["Groupes détectés", data.groupsDetected],
+        ["Commandes exécutées", data.commandsExecuted],
+        ["Liens bloqués", data.linksBlocked],
+        ["Médias bloqués", data.mediaBlocked],
+        ["Uptime serveur", fmtUptime(data.uptime)],
+        ["Telegram", data.telegramStatus]
+      ].map(([label, value]) => `
+        <div class="card"><div class="label">${label}</div><div class="value ${String(value).length>10?'small':''}">${value}</div></div>
+      `).join("");
+
+      const sessions = await api("/api/sessions");
+      const list = document.getElementById("liveStatusList");
+      if (!sessions.data.length){
+        list.innerHTML = '<div class="empty">Aucune session enregistrée pour le moment.</div>';
+      } else {
+        list.innerHTML = sessions.data.map(s => `
+          <div class="toggle-row">
+            <div class="meta"><span class="dot ${s.status==='connected'?'green':'yellow'}"></span> &nbsp;${s.number}
+              <div class="sub">${s.messages} messages · ${s.groups} groupes</div>
+            </div>
+            <span class="badge ${s.status==='connected'?'green':'yellow'}">${s.status==='connected'?'🟢 Connected':'🟡 Connecting'}</span>
+          </div>
+        `).join("");
+      }
+    } catch(e){ /* toast déjà affiché */ }
+  }
+
+  // ── Sessions ────────────────────────────────────────────────
+  async function loadSessions(){
+    const tbody = document.querySelector("#sessionsTable tbody");
+    try{
+      const { data } = await api("/api/sessions");
+      if (!data.length){
+        tbody.innerHTML = '<tr><td colspan="7" class="empty">Aucune session. Rends-toi dans "Pairing" pour en créer une.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = data.map(s => `
+        <tr>
+          <td data-label="Numéro">${s.number}</td>
+          <td data-label="Statut"><span class="badge ${s.status==='connected'?'green':'yellow'}">${s.status}</span></td>
+          <td data-label="Uptime">${fmtUptime(s.uptime)}</td>
+          <td data-label="Messages">${s.messages}</td>
+          <td data-label="Groupes">${s.groups}</td>
+          <td data-label="Commandes">${s.commands}</td>
+          <td data-label="Actions">
+            <button class="btn secondary sm" data-act="reconnect" data-num="${s.number}">Reconnecter</button>
+            <button class="btn ghost sm" data-act="disconnect" data-num="${s.number}">Déconnecter</button>
+            <button class="btn danger sm" data-act="delete" data-num="${s.number}">Supprimer</button>
+          </td>
+        </tr>
+      `).join("");
+
+      tbody.querySelectorAll("button[data-act]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const num = btn.dataset.num, act = btn.dataset.act;
+          if (act === "reconnect"){
+            api(`/api/sessions/${num}/reconnect`, { method: "POST" }).then(() => { toast("Reconnexion lancée", "success"); loadSessions(); });
+          } else if (act === "disconnect"){
+            confirmAction("Déconnecter la session", `Déconnecter ${num} ?`, () => {
+              api(`/api/sessions/${num}/disconnect`, { method: "POST" }).then(() => { toast("Session déconnectée", "success"); loadSessions(); });
+            });
+          } else if (act === "delete"){
+            confirmAction("Supprimer la session", `Cette action supprime définitivement la session ${num}. Continuer ?`, () => {
+              api(`/api/sessions/${num}`, { method: "DELETE" }).then(() => { toast("Session supprimée", "success"); loadSessions(); });
+            });
+          }
+        });
+      });
+    } catch(e){
+      tbody.innerHTML = '<tr><td colspan="7" class="empty">Erreur de chargement.</td></tr>';
+    }
+  }
+
+  // ── Pairing ─────────────────────────────────────────────────
+  document.getElementById("pairBtn").addEventListener("click", async () => {
+    const input = document.getElementById("pairNumber");
+    const number = input.value.replace(/\D/g,"");
+    const resultBox = document.getElementById("pairResult");
+    if (!number || number.length < 8){ toast("Numéro invalide", "error"); return; }
+    const btn = document.getElementById("pairBtn");
+    btn.disabled = true; btn.textContent = "Génération…";
+    resultBox.innerHTML = '<div class="empty">Connexion à WhatsApp…</div>';
+    try{
+      const res = await fetch(`/pair-api/code?number=${encodeURIComponent(number)}`);
+      const json = await res.json();
+      if (json.error){
+        resultBox.innerHTML = `<div class="empty">Erreur : ${json.error}</div>`;
+        toast(json.error, "error");
+      } else if (json.status === "connected"){
+        resultBox.innerHTML = '<div class="code-display"><div>✅ Ce numéro est déjà connecté.</div></div>';
+      } else if (json.code){
+        resultBox.innerHTML = `
+          <div class="code-display">
+            <div><div class="sub" style="color:var(--text-dim);font-size:12px;">Code de jumelage</div>
+            <div class="code" id="pairCodeValue">${json.code}</div></div>
+            <button class="btn secondary sm" id="copyCodeBtn">📋 Copier</button>
+          </div>
+          <p style="font-size:12px;color:var(--text-dim);margin-top:10px;">
+            Ouvre WhatsApp → Appareils liés → Lier un appareil → Lier avec le numéro de téléphone, puis saisis ce code.
+          </p>`;
+        document.getElementById("copyCodeBtn").addEventListener("click", () => {
+          navigator.clipboard.writeText(json.code.replace(/-/g,"")).then(() => toast("Code copié", "success"));
+        });
+      }
+    } catch(e){
+      resultBox.innerHTML = '<div class="empty">Erreur réseau.</div>';
+      toast("Erreur réseau", "error");
+    } finally {
+      btn.disabled = false; btn.textContent = "Générer le code";
+    }
+  });
+
+  // ── Protections ─────────────────────────────────────────────
+  const PROT_DEFS = [
+    { key: "antilink", label: "AntiLink", sub: "Bloque les liens non autorisés", hasAction: true },
+    { key: "antiphoto", label: "AntiPhoto", sub: "Bloque les images dans les groupes", hasAction: true },
+    { key: "antivideo", label: "AntiVideo", sub: "Bloque les vidéos", hasAction: true },
+    { key: "antiaudio", label: "AntiAudio", sub: "Bloque les audios", hasAction: true },
+    { key: "antidocument", label: "AntiDocument", sub: "Bloque les documents", hasAction: true },
+    { key: "antisticker", label: "AntiSticker", sub: "Bloque les stickers", hasAction: true },
+    { key: "antispam", label: "AntiSpam", sub: "Limite le nombre de messages par fenêtre de temps", hasAction: true },
+    { key: "antitag", label: "AntiTag", sub: "Détecte les mentions massives", hasAction: true },
+    { key: "anticall", label: "AntiCall", sub: "Rejette les appels entrants", hasAction: false }
+  ];
+
+  async function populateProtSessions(){
+    const select = document.getElementById("protSessionSelect");
+    try{
+      const { data } = await api("/api/sessions");
+      select.innerHTML = '<option value="">— Choisir une session —</option>' +
+        data.map(s => `<option value="${s.number}">${s.number} (${s.status})</option>`).join("");
+    } catch(e){}
+  }
+
+  document.getElementById("protSessionSelect").addEventListener("change", async (e) => {
+    const number = e.target.value;
+    const body = document.getElementById("protectionsBody");
+    if (!number){ body.innerHTML = '<div class="empty">Sélectionne une session connectée pour configurer ses protections.</div>'; return; }
+    body.innerHTML = '<div class="empty">Chargement…</div>';
+    try{
+      const { data: cfg } = await api(`/api/features/${number}`);
+      body.innerHTML = PROT_DEFS.map(def => {
+        const c = cfg[def.key] || {};
+        return `
+          <div class="toggle-row">
+            <div class="meta">${def.label}<div class="sub">${def.sub}</div></div>
+            <div style="display:flex;align-items:center;gap:10px;">
+              ${def.hasAction ? `
+                <select class="action-select" data-key="${def.key}" data-field="action">
+                  <option value="delete" ${c.action==='delete'?'selected':''}>Delete</option>
+                  <option value="warn" ${c.action==='warn'?'selected':''}>Warn</option>
+                  <option value="kick" ${c.action==='kick'?'selected':''}>Kick</option>
+                  <option value="ban" ${c.action==='ban'?'selected':''}>Ban</option>
+                </select>` : ""}
+              <label class="switch">
+                <input type="checkbox" data-key="${def.key}" data-field="enabled" ${c.enabled?'checked':''}>
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>`;
+      }).join("") + `
+        <div class="toggle-row">
+          <div class="meta">Welcome<div class="sub">Message de bienvenue à l'arrivée d'un membre</div></div>
+          <label class="switch"><input type="checkbox" id="protWelcome" ${cfg.welcome?'checked':''}><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div class="meta">Goodbye<div class="sub">Message au départ d'un membre</div></div>
+          <label class="switch"><input type="checkbox" id="protBye" ${cfg.bye?'checked':''}><span class="slider"></span></label>
+        </div>
+        <div style="margin-top:16px;text-align:right;">
+          <button class="btn" id="saveProtBtn">💾 Enregistrer</button>
+        </div>`;
+
+      document.getElementById("saveProtBtn").addEventListener("click", async () => {
+        const patch = {};
+        PROT_DEFS.forEach(def => { patch[def.key] = { ...(cfg[def.key]||{}) }; });
+        body.querySelectorAll("[data-key]").forEach(el => {
+          const key = el.dataset.key, field = el.dataset.field;
+          patch[key] = patch[key] || {};
+          patch[key][field] = el.type === "checkbox" ? el.checked : el.value;
+        });
+        patch.welcome = document.getElementById("protWelcome").checked;
+        patch.bye = document.getElementById("protBye").checked;
+        try{
+          await api(`/api/features/${number}`, { method: "POST", body: JSON.stringify(patch) });
+          toast("Configuration enregistrée", "success");
+        } catch(e){}
+      });
+    } catch(e){
+      body.innerHTML = '<div class="empty">Impossible de charger cette session.</div>';
+    }
+  });
+
+  // ── Telegram ────────────────────────────────────────────────
+  async function loadTelegram(){
+    try{
+      const { data } = await api("/api/telegram/status");
+      const grid = document.getElementById("telegramGrid");
+      grid.innerHTML = [
+        ["Bot", data.username ? "@" + data.username : "—"],
+        ["Statut", data.configured ? (data.polling ? "🟢 Connecté" : "🔴 Arrêté") : "⚠️ Non configuré"],
+        ["Token", data.tokenMasked],
+        ["Dernière update", data.lastUpdate ? new Date(data.lastUpdate).toLocaleTimeString() : "—"],
+        ["Erreurs", data.errors]
+      ].map(([label,value]) => `<div class="card"><div class="label">${label}</div><div class="value small">${value}</div></div>`).join("");
+    } catch(e){}
+  }
+  document.getElementById("tgTestBtn").addEventListener("click", async () => {
+    try{
+      const res = await api("/api/telegram/test", { method: "POST" });
+      toast("Connexion Telegram OK (@" + res.data.username + ")", "success");
+    } catch(e){}
+  });
+
+  // ── Logs ────────────────────────────────────────────────────
+  async function loadLogs(){
+    const sev = document.getElementById("logSeverity").value;
+    const plat = document.getElementById("logPlatform").value;
+    const list = document.getElementById("logsList");
+    try{
+      const { data } = await api(`/api/logs?severity=${sev}&platform=${plat}&limit=150`);
+      if (!data.length){ list.innerHTML = '<div class="empty">Aucun log pour ce filtre.</div>'; return; }
+      list.innerHTML = data.map(l => `
+        <div class="log-line">
+          <span class="ts">${new Date(l.timestamp).toLocaleTimeString()}</span>
+          <span class="plat">[${l.platform}${l.session && l.session!=='-' ? ':'+l.session : ''}]</span>
+          <span>${l.message}</span>
+        </div>`).join("");
+    } catch(e){
+      list.innerHTML = '<div class="empty">Erreur de chargement.</div>';
+    }
+  }
+  document.getElementById("logRefreshBtn").addEventListener("click", loadLogs);
+  document.getElementById("logSeverity").addEventListener("change", loadLogs);
+  document.getElementById("logPlatform").addEventListener("change", loadLogs);
+
+  // ── Router / refresh ────────────────────────────────────────
+  function loadSection(target){
+    if (target === "dashboard") loadDashboard();
+    else if (target === "sessions") loadSessions();
+    else if (target === "protections") populateProtSessions();
+    else if (target === "telegram") loadTelegram();
+    else if (target === "logs") loadLogs();
+  }
+
+  document.getElementById("refreshBtn").addEventListener("click", () => {
+    const active = document.querySelector(".nav-item.active").dataset.target;
+    loadSection(active);
+    toast("Actualisé", "success");
+  });
+
+  // Chargement initial + rafraîchissement périodique léger du dashboard
+  loadDashboard();
+  setInterval(() => {
+    const active = document.querySelector(".nav-item.active").dataset.target;
+    if (active === "dashboard") loadDashboard();
+  }, 8000);
+})();
+</script>
+</body>
+</html>
