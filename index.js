@@ -15,27 +15,18 @@ import {
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   delay,
-  jidNormalizedUser
+  jidNormalizedUser,
+  DisconnectReason
 } from "@whiskeysockets/baileys";
 
 // ════════════════════════════════════════════════════════════════
-//  FILETS DE SÉCURITÉ GLOBAUX
-//  Une erreur non interceptée quelque part (WhatsApp, Telegram,
-//  Express) ne doit jamais faire tomber tout le process.
-// ════════════════════════════════════════════════════════════════
-process.on("uncaughtException", (err) => {
-  console.error(chalk.red(`[FATAL] Exception non interceptée : ${err?.stack || err}`));
-});
-process.on("unhandledRejection", (reason) => {
-  console.error(chalk.red(`[FATAL] Rejet de promesse non géré : ${reason}`));
-});
-
-// ════════════════════════════════════════════════════════════════
-//  CONFIGURATION INTERNE (pas de .env, tout est ici)
+//  CONFIGURATION INTERNE
+//  Le token peut être fourni par variable d'environnement (recommandé
+//  en production). La valeur en dur ne sert que de secours pour ne
+//  pas casser le déploiement existant.
 // ════════════════════════════════════════════════════════════════
 
-// Token Telegram (BotFather) — reste exclusivement ici, jamais exposé au frontend ni dans les logs.
-const TELEGRAM_BOT_TOKEN = "8788156145:AAENvMXJCFktb7pgcx_Htig2bgSpeoJ4-js";
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "8788156145:AAENvMXJCFktb7pgcx_Htig2bgSpeoJ4-js";
 
 // ⚠️ Chat ID numérique du groupe officiel (PAS le lien d'invitation).
 // Pour l'obtenir : ajoute ton bot comme admin du groupe, poste un message
@@ -43,7 +34,7 @@ const TELEGRAM_BOT_TOKEN = "8788156145:AAENvMXJCFktb7pgcx_Htig2bgSpeoJ4-js";
 // et lis le champ "chat":{"id": ...} (nombre négatif pour un groupe).
 // Tant que cette valeur vaut 0, la vérification d'appartenance est
 // désactivée automatiquement (pour ne jamais bloquer le bot par erreur).
-const TELEGRAM_GROUP_CHAT_ID = 0;
+const TELEGRAM_GROUP_CHAT_ID = Number(process.env.TELEGRAM_GROUP_CHAT_ID || 0);
 
 // Lien d'invitation affiché au bouton "Rejoindre le groupe".
 const TELEGRAM_GROUP_INVITE_LINK = "https://t.me/+xYpA7fGQ3mxkYWE0";
@@ -56,6 +47,7 @@ const TELEGRAM_ADMINS = [
 
 const PORT = process.env.PORT || 80;
 const PAIRING_DIR = "./sessions";
+const DATA_DIR = "./data";
 const MAX_SESSIONS = 20;
 
 const AUTO_JOIN_GROUP_LINKS = [
@@ -64,6 +56,18 @@ const AUTO_JOIN_GROUP_LINKS = [
 const AUTO_JOIN_CHANNEL_LINKS = [
   "https://whatsapp.com/channel/0029VbDZMQBFCCoTkkAe5i2X"
 ];
+
+// Images d'avatar centralisées — utilisées par le frontend (avatar mini,
+// branding) et par le backend (welcome/goodbye Telegram avec image aléatoire).
+const AVATAR_IMAGES = [
+  "https://files.catbox.moe/da9ntu.jpg",
+  "https://files.catbox.moe/4cy4ok.jpg",
+  "https://files.catbox.moe/sxkaqj.jpg",
+  "https://files.catbox.moe/yor7ct.jpg"
+];
+function randomAvatar() {
+  return AVATAR_IMAGES[Math.floor(Math.random() * AVATAR_IMAGES.length)];
+}
 
 // ════════════════════════════════════════════════════════════════
 //  ÉTAT GLOBAL EN MÉMOIRE
@@ -74,7 +78,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 await fs.ensureDir(PAIRING_DIR);
+await fs.ensureDir(DATA_DIR);
+
 const bots = new Map();
+// Verrou anti-course : empêche deux `startBot()` concurrents pour le
+// même numéro (double-clic reconnexion, reconnexion auto + manuelle...).
+const startingLocks = new Set();
 const startedAt = Date.now();
 
 const stats = {
@@ -112,6 +121,31 @@ function addLog(platform, session, event, severity, message) {
   return entry;
 }
 
+// ════════════════════════════════════════════════════════════════
+//  FILETS DE SÉCURITÉ GLOBAUX
+//  Une erreur non interceptée quelque part (WhatsApp, Telegram,
+//  Express) ne doit jamais faire tomber tout le process.
+//  Placés APRÈS addLog()/logs pour pouvoir tracer proprement — s'ils
+//  se déclenchent avant (ex. pendant l'initialisation), on retombe sur
+//  console.error uniquement.
+// ════════════════════════════════════════════════════════════════
+process.on("uncaughtException", (err) => {
+  const message = err?.stack || String(err);
+  try {
+    addLog("system", "-", "uncaughtException", "error", message);
+  } catch {
+    console.error(chalk.red(`[FATAL] Exception non interceptée : ${message}`));
+  }
+});
+process.on("unhandledRejection", (reason) => {
+  const message = reason?.stack || String(reason);
+  try {
+    addLog("system", "-", "unhandledRejection", "error", message);
+  } catch {
+    console.error(chalk.red(`[FATAL] Rejet de promesse non géré : ${message}`));
+  }
+});
+
 // Compat : demoteall.js / promoteall.js s'attendent à `global.bots` /
 // `global.owners`, comme dans un bot mono-session, avec des JID complets.
 global.bots = new Proxy(bots, {
@@ -131,6 +165,10 @@ global.bots = new Proxy(bots, {
 
 function formatNumber(num) {
   return String(num).replace(/\D/g, "").replace(/^0+/, "");
+}
+
+function escapeHtml(str) {
+  return String(str ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
 async function removeSession(dir) {
@@ -427,265 +465,377 @@ async function runProtections(sock, bot, number, msg, remoteJid, participant, se
 //  MOTEUR WHATSAPP
 // ════════════════════════════════════════════════════════════════
 
+const MAX_RECONNECT_ATTEMPTS = 10;
+
 async function startBot(inputNumber) {
   const number = formatNumber(inputNumber);
   if (!number || number.length < 8) throw new Error("Numéro invalide");
 
-  if (bots.has(number)) {
-    const existing = bots.get(number);
-    if (existing?.linked) return null;
-    await closeExistingSocket(existing);
-    bots.delete(number);
+  if (startingLocks.has(number)) {
+    throw new Error("Une connexion est déjà en cours pour ce numéro, patiente quelques secondes.");
   }
+  startingLocks.add(number);
 
-  const SESSION_DIR = path.join(PAIRING_DIR, number);
-  const isNewSession = !(await fs.pathExists(SESSION_DIR));
-
-  if (isNewSession) {
-    const current = await countSessions();
-    if (current >= MAX_SESSIONS) {
-      throw new Error(`Nombre maximum de sessions atteint (${MAX_SESSIONS}).`);
+  try {
+    if (bots.has(number)) {
+      const existing = bots.get(number);
+      if (existing?.linked) return null;
+      clearTimeout(existing.reconnectTimer);
+      await closeExistingSocket(existing);
+      bots.delete(number);
     }
-  }
 
-  await fs.ensureDir(SESSION_DIR);
+    const SESSION_DIR = path.join(PAIRING_DIR, number);
+    const isNewSession = !(await fs.pathExists(SESSION_DIR));
 
-  const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
-  const { version } = await fetchLatestBaileysVersion();
-
-  const sock = makeWASocket({
-    version,
-    auth: {
-      creds: state.creds,
-      keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }))
-    },
-    logger: pino({ level: "silent" }),
-    browser: Browsers.windows("Chrome"),
-    markOnlineOnConnect: false,
-    printQRInTerminal: false
-  });
-
-  sock.ev.on("creds.update", saveCreds);
-
-  const commands = await loadCommands();
-  const config = await loadProtectionConfig(SESSION_DIR);
-  if (!config.owners) config.owners = [];
-  const features = {
-    autoread: config.autoread,
-    autoreact: config.autoreact,
-    autotyping: config.autotyping,
-    autorecording: config.autorecording,
-    welcome: config.welcome,
-    bye: config.bye,
-    antilink: config.antilink?.enabled || false
-  };
-
-  bots.set(number, {
-    sock, commands, config, features,
-    sessionDir: SESSION_DIR,
-    linked: false,
-    connectedAt: null,
-    messages: 0,
-    commandsRun: 0,
-    groups: new Set(),
-    lastActivity: null,
-    bannedUsers: new Set()
-  });
-  addLog("whatsapp", number, "start", "info", "Bot lancé");
-
-  sock.ev.on("messages.upsert", async ({ messages }) => {
-    try {
-      const msg = messages[0];
-      if (!msg?.message) return;
-
-      const remoteJid = msg.key.remoteJid;
-      const participant = msg.key.participant || remoteJid;
-
-      const text =
-        msg.message.conversation ||
-        msg.message.extendedTextMessage?.text ||
-        msg.message.imageMessage?.caption ||
-        msg.message.videoMessage?.caption ||
-        msg.message.documentMessage?.caption ||
-        "";
-
-      const bot = bots.get(number);
-      if (!bot) return;
-
-      bot.messages++;
-      bot.lastActivity = Date.now();
-      stats.messagesProcessed++;
-      if (remoteJid.endsWith("@g.us")) {
-        bot.groups.add(remoteJid);
-        stats.groupsDetected.add(remoteJid);
+    if (isNewSession) {
+      const current = await countSessions();
+      if (current >= MAX_SESSIONS) {
+        throw new Error(`Nombre maximum de sessions atteint (${MAX_SESSIONS}).`);
       }
+    }
 
-      const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage || null;
+    await fs.ensureDir(SESSION_DIR);
 
-      const senderNumber = formatNumber(String(participant).split("@")[0]);
-      const isOwner =
-        msg.key.fromMe ||
-        senderNumber === number ||
-        (bot.config.owners || []).includes(senderNumber);
+    const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
+    const { version } = await fetchLatestBaileysVersion();
 
-      // Protections (toujours évaluées, même hors commande)
-      if (!msg.key.fromMe) {
-        runProtections(sock, bot, number, msg, remoteJid, participant, senderNumber, text)
-          .catch(e => addLog("whatsapp", number, "protection", "error", e.message));
-      }
+    const sock = makeWASocket({
+      version,
+      auth: {
+        creds: state.creds,
+        keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }))
+      },
+      logger: pino({ level: "silent" }),
+      browser: Browsers.windows("Chrome"),
+      markOnlineOnConnect: false,
+      printQRInTerminal: false
+    });
 
-      if (text && text.startsWith(bot.config.prefix || ".")) {
-        if (!isOwner) return;
-        const prefix = bot.config.prefix || ".";
-        const args = text.slice(prefix.length).trim().split(/\s+/);
-        const cmdName = (args.shift() || "").toLowerCase();
+    sock.ev.on("creds.update", saveCreds);
 
-        if (cmdName && Object.prototype.hasOwnProperty.call(bot.features, cmdName)) {
-          if (!["on", "off"].includes(args[0])) {
-            return sock.sendMessage(remoteJid, { text: `*_Usage : ${prefix}${cmdName} on/off_*` });
-          }
-          bot.features[cmdName] = args[0] === "on";
-          bot.config[cmdName] = args[0] === "on";
-          await saveProtectionConfig(number);
-          return sock.sendMessage(remoteJid, { text: `*_Fonctionnalité ${cmdName} : ${args[0]}_*` });
+    const commands = await loadCommands();
+    const config = await loadProtectionConfig(SESSION_DIR);
+    if (!config.owners) config.owners = [];
+    const features = {
+      autoread: config.autoread,
+      autoreact: config.autoreact,
+      autotyping: config.autotyping,
+      autorecording: config.autorecording,
+      welcome: config.welcome,
+      bye: config.bye,
+      antilink: config.antilink?.enabled || false
+    };
+
+    bots.set(number, {
+      sock, commands, config, features,
+      sessionDir: SESSION_DIR,
+      linked: false,
+      connectedAt: null,
+      messages: 0,
+      commandsRun: 0,
+      groups: new Set(),
+      lastActivity: null,
+      bannedUsers: new Set(),
+      manualClose: false,
+      reconnectAttempts: 0,
+      reconnectTimer: null
+    });
+    addLog("whatsapp", number, "start", "info", "Bot lancé");
+
+    sock.ev.on("messages.upsert", async ({ messages }) => {
+      try {
+        const msg = messages[0];
+        if (!msg?.message) return;
+
+        const remoteJid = msg.key.remoteJid;
+        const participant = msg.key.participant || remoteJid;
+
+        const text =
+          msg.message.conversation ||
+          msg.message.extendedTextMessage?.text ||
+          msg.message.imageMessage?.caption ||
+          msg.message.videoMessage?.caption ||
+          msg.message.documentMessage?.caption ||
+          "";
+
+        const bot = bots.get(number);
+        if (!bot) return;
+
+        bot.messages++;
+        bot.lastActivity = Date.now();
+        stats.messagesProcessed++;
+        if (remoteJid.endsWith("@g.us")) {
+          bot.groups.add(remoteJid);
+          stats.groupsDetected.add(remoteJid);
         }
 
-        if (cmdName && bot.commands.has(cmdName)) {
+        const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage || null;
+
+        const senderNumber = formatNumber(String(participant).split("@")[0]);
+        const isOwner =
+          msg.key.fromMe ||
+          senderNumber === number ||
+          (bot.config.owners || []).includes(senderNumber);
+
+        // Protections (toujours évaluées, même hors commande)
+        if (!msg.key.fromMe) {
+          runProtections(sock, bot, number, msg, remoteJid, participant, senderNumber, text)
+            .catch(e => addLog("whatsapp", number, "protection", "error", e.message));
+        }
+
+        if (text && text.startsWith(bot.config.prefix || ".")) {
+          if (!isOwner) return;
+          const prefix = bot.config.prefix || ".";
+          const args = text.slice(prefix.length).trim().split(/\s+/);
+          const cmdName = (args.shift() || "").toLowerCase();
+
+          if (cmdName && Object.prototype.hasOwnProperty.call(bot.features, cmdName)) {
+            if (!["on", "off"].includes(args[0])) {
+              return sock.sendMessage(remoteJid, { text: `*_Usage : ${prefix}${cmdName} on/off_*` });
+            }
+            bot.features[cmdName] = args[0] === "on";
+            bot.config[cmdName] = args[0] === "on";
+            await saveProtectionConfig(number);
+            return sock.sendMessage(remoteJid, { text: `*_Fonctionnalité ${cmdName} : ${args[0]}_*` });
+          }
+
+          if (cmdName && bot.commands.has(cmdName)) {
+            try {
+              global.owners = bot.config.owners || [];
+              process.env.NUMBER = number;
+
+              await bot.commands.get(cmdName).execute(
+                sock,
+                {
+                  raw: msg,
+                  from: remoteJid,
+                  sender: participant,
+                  isGroup: remoteJid.endsWith("@g.us"),
+                  quoted,
+                  reply: t => sock.sendMessage(remoteJid, { text: `*_${t}_*` }),
+                  bots
+                },
+                args
+              );
+
+              bot.commandsRun++;
+              stats.commandsExecuted++;
+              await sock.sendMessage(remoteJid, { react: { text: "🐉", key: msg.key } });
+            } catch (e) {
+              addLog("whatsapp", number, `cmd:${cmdName}`, "error", e.message);
+              sock.sendMessage(remoteJid, { text: "*_Erreur lors de l'exécution de la commande._*" }).catch(() => {});
+            }
+          }
+        }
+
+        if (!msg.key.fromMe) {
           try {
-            global.owners = bot.config.owners || [];
-            process.env.NUMBER = number;
-
-            await bot.commands.get(cmdName).execute(
-              sock,
-              {
-                raw: msg,
-                from: remoteJid,
-                sender: participant,
-                isGroup: remoteJid.endsWith("@g.us"),
-                quoted,
-                reply: t => sock.sendMessage(remoteJid, { text: `*_${t}_*` }),
-                bots
-              },
-              args
-            );
-
-            bot.commandsRun++;
-            stats.commandsExecuted++;
-            await sock.sendMessage(remoteJid, { react: { text: "🐉", key: msg.key } });
+            if (bot.features.autoread) await sock.readMessages([msg.key]);
+            if (bot.features.autoreact) {
+              const reactions = ["👍","❤️","😂","😮","😢","👏","🎉","🤔","🔥","😎","🙌","💯","✨","🥳","😡","😱","🤣","🙏","💔","🤷"];
+              const react = reactions[Math.floor(Math.random() * reactions.length)];
+              await sock.sendMessage(remoteJid, { react: { text: react, key: msg.key } });
+            }
+            if (bot.features.autotyping && remoteJid.endsWith("@g.us")) await sock.sendPresenceUpdate("composing", remoteJid);
+            if (bot.features.autorecording && remoteJid.endsWith("@g.us")) await sock.sendPresenceUpdate("recording", remoteJid);
           } catch (e) {
-            addLog("whatsapp", number, `cmd:${cmdName}`, "error", e.message);
-            sock.sendMessage(remoteJid, { text: "*_Erreur lors de l'exécution de la commande._*" }).catch(() => {});
+            addLog("whatsapp", number, "auto", "warning", e.message);
           }
         }
+      } catch (e) {
+        addLog("whatsapp", number, "message", "error", e.message);
       }
+    });
 
-      if (!msg.key.fromMe) {
-        try {
-          if (bot.features.autoread) await sock.readMessages([msg.key]);
-          if (bot.features.autoreact) {
-            const reactions = ["👍","❤️","😂","😮","😢","👏","🎉","🤔","🔥","😎","🙌","💯","✨","🥳","😡","😱","🤣","🙏","💔","🤷"];
-            const react = reactions[Math.floor(Math.random() * reactions.length)];
-            await sock.sendMessage(remoteJid, { react: { text: react, key: msg.key } });
+    sock.ev.on("group-participants.update", async ({ id, participants, action }) => {
+      try {
+        const bot = bots.get(number);
+        if (!bot) return;
+        const toJid = p => (typeof p === "string" ? p : p?.id);
+
+        if (action === "add" && bot.features.welcome) {
+          for (const raw of participants) {
+            const p = toJid(raw);
+            if (!p) continue;
+            const text = (bot.config.welcomeMessage || "Bienvenue @user dans le groupe.").replace("@user", `@${p.split("@")[0]}`);
+            await sock.sendMessage(id, { text, mentions: [p] }).catch(() => {});
           }
-          if (bot.features.autotyping && remoteJid.endsWith("@g.us")) await sock.sendPresenceUpdate("composing", remoteJid);
-          if (bot.features.autorecording && remoteJid.endsWith("@g.us")) await sock.sendPresenceUpdate("recording", remoteJid);
-        } catch (e) {
-          addLog("whatsapp", number, "auto", "warning", e.message);
         }
+        if (action === "remove" && bot.features.bye) {
+          for (const raw of participants) {
+            const p = toJid(raw);
+            if (!p) continue;
+            const text = (bot.config.byeMessage || "@user a quitté le groupe.").replace("@user", `@${p.split("@")[0]}`);
+            await sock.sendMessage(id, { text, mentions: [p] }).catch(() => {});
+          }
+        }
+      } catch (e) {
+        addLog("whatsapp", number, "group-update", "error", e.message);
       }
-    } catch (e) {
-      addLog("whatsapp", number, "message", "error", e.message);
-    }
-  });
+    });
 
-  sock.ev.on("group-participants.update", async ({ id, participants, action }) => {
-    try {
-      const bot = bots.get(number);
-      if (!bot) return;
-      const toJid = p => (typeof p === "string" ? p : p?.id);
-
-      if (action === "add" && bot.features.welcome) {
-        for (const raw of participants) {
-          const p = toJid(raw);
-          if (!p) continue;
-          const text = (bot.config.welcomeMessage || "Bienvenue @user dans le groupe.").replace("@user", `@${p.split("@")[0]}`);
-          await sock.sendMessage(id, { text, mentions: [p] }).catch(() => {});
+    sock.ev.on("call", async (calls) => {
+      try {
+        const bot = bots.get(number);
+        if (!bot?.config.anticall?.enabled) return;
+        for (const call of calls) {
+          if (call.status === "offer" && typeof sock.rejectCall === "function") {
+            await sock.rejectCall(call.id, call.from).catch(() => {});
+            addLog("whatsapp", number, "anticall", "info", `Appel rejeté de ${call.from}`);
+          }
         }
+      } catch (e) {
+        addLog("whatsapp", number, "anticall", "error", e.message);
       }
-      if (action === "remove" && bot.features.bye) {
-        for (const raw of participants) {
-          const p = toJid(raw);
-          if (!p) continue;
-          const text = (bot.config.byeMessage || "@user a quitté le groupe.").replace("@user", `@${p.split("@")[0]}`);
-          await sock.sendMessage(id, { text, mentions: [p] }).catch(() => {});
-        }
-      }
-    } catch (e) {
-      addLog("whatsapp", number, "group-update", "error", e.message);
-    }
-  });
+    });
 
-  sock.ev.on("call", async (calls) => {
-    try {
-      const bot = bots.get(number);
-      if (!bot?.config.anticall?.enabled) return;
-      for (const call of calls) {
-        if (call.status === "offer" && typeof sock.rejectCall === "function") {
-          await sock.rejectCall(call.id, call.from).catch(() => {});
-          addLog("whatsapp", number, "anticall", "info", `Appel rejeté de ${call.from}`);
-        }
-      }
-    } catch (e) {
-      addLog("whatsapp", number, "anticall", "error", e.message);
-    }
-  });
+    // ── connection.update : cœur de la stabilité ──────────────────
+    // Corrige le mapping des codes de déconnexion Baileys (le code
+    // d'origine confondait notamment 405/440/428 avec des sessions
+    // invalides, alors que seuls 401/403/500/411 le sont vraiment ;
+    // 411 = multideviceMismatch, pas 405 qui n'existe pas dans
+    // DisconnectReason — cette confondance empêchait de jamais purger
+    // une vraie session incompatible et supprimait à tort des sessions
+    // récupérables sur un simple 428/440).
+    sock.ev.on("connection.update", async (update) => {
+      try {
+        const { connection, lastDisconnect } = update;
+        const bot = bots.get(number);
+        if (!bot) return; // session supprimée entre-temps
 
-  sock.ev.on("connection.update", async ({ connection, lastDisconnect }) => {
-    try {
-      const bot = bots.get(number);
+        if (connection === "close") {
+          bot.linked = false;
+          const err = lastDisconnect?.error;
+          const code = err?.output?.statusCode;
+          const reasonText = err?.message || "raison inconnue";
 
-      if (connection === "close") {
-        if (bot) bot.linked = false;
-        const code = lastDisconnect?.error?.output?.statusCode;
+          // Déconnexion volontaire (API /disconnect ou /delete) :
+          // ne jamais reconnecter automatiquement.
+          if (bot.manualClose) {
+            addLog("whatsapp", number, "disconnect", "info", "Déconnexion volontaire — pas de reconnexion automatique.");
+            return;
+          }
 
-        if (code === 401 || code === 403) {
-          await removeSession(SESSION_DIR);
-          bots.delete(number);
-          addLog("whatsapp", number, "disconnect", "error", `Session supprimée (code ${code})`);
-        } else if (code === 428 || code === 405 || code === 440) {
-          await removeSession(SESSION_DIR);
-          bots.delete(number);
-          addLog("whatsapp", number, "disconnect", "error", `Session invalide, supprimée (code ${code})`);
-        } else {
-          addLog("whatsapp", number, "reconnect", "warning", "Reconnexion dans 3s...");
-          setTimeout(() => startBot(number).catch(e => addLog("whatsapp", number, "reconnect", "error", e.message)), 3000);
-        }
-      } else if (connection === "open") {
-        if (bot) {
+          // Codes fatals : la session doit être purgée, la reconnecter
+          // aveuglément ne ferait que boucler sur la même erreur.
+          if (code === DisconnectReason.loggedOut) {
+            await removeSession(SESSION_DIR);
+            bots.delete(number);
+            addLog("whatsapp", number, "disconnect", "error", "Déconnecté depuis un autre appareil (logout). Session supprimée.");
+            return;
+          }
+          if (code === DisconnectReason.forbidden) {
+            await removeSession(SESSION_DIR);
+            bots.delete(number);
+            addLog("whatsapp", number, "disconnect", "error", "Numéro banni par WhatsApp (403). Session supprimée.");
+            return;
+          }
+          if (code === DisconnectReason.badSession) {
+            await removeSession(SESSION_DIR);
+            bots.delete(number);
+            addLog("whatsapp", number, "disconnect", "error", "Session corrompue (bad session). Session supprimée, un nouveau pairing est nécessaire.");
+            return;
+          }
+          if (code === DisconnectReason.multideviceMismatch) {
+            await removeSession(SESSION_DIR);
+            bots.delete(number);
+            addLog("whatsapp", number, "disconnect", "error", "Session incompatible avec le multi-appareil. Session supprimée.");
+            return;
+          }
+
+          // Connexion reprise par un autre processus/appareil : ne pas
+          // relancer aussitôt pour éviter une guerre de reconnexion qui
+          // ferait sauter l'autre connexion en boucle.
+          if (code === DisconnectReason.connectionReplaced) {
+            addLog("whatsapp", number, "disconnect", "warning", "Connexion remplacée par un autre appareil/processus. Reconnexion manuelle requise.");
+            return;
+          }
+
+          // Tout le reste (connectionClosed 428, connectionLost/timedOut
+          // 408, restartRequired 515, erreurs réseau sans code...) est
+          // considéré récupérable : on retente avec un backoff croissant
+          // et un plafond de tentatives pour ne jamais boucler à l'infini.
+          bot.reconnectAttempts = (bot.reconnectAttempts || 0) + 1;
+          if (bot.reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+            addLog("whatsapp", number, "reconnect", "error", `Abandon après ${MAX_RECONNECT_ATTEMPTS} tentatives (dernière raison : ${reasonText}, code ${code ?? "?"}). Reconnexion manuelle requise depuis le dashboard.`);
+            return;
+          }
+          const backoff = Math.min(3000 * Math.pow(2, bot.reconnectAttempts - 1), 60000);
+          addLog("whatsapp", number, "reconnect", "warning", `Connexion fermée (${reasonText}, code ${code ?? "?"}). Reconnexion dans ${Math.round(backoff / 1000)}s (tentative ${bot.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
+          clearTimeout(bot.reconnectTimer);
+          bot.reconnectTimer = setTimeout(() => {
+            if (startingLocks.has(number)) return; // une reconnexion manuelle est déjà en cours
+            startBot(number).catch(e => addLog("whatsapp", number, "reconnect", "error", e.message));
+          }, backoff);
+
+        } else if (connection === "open") {
           bot.linked = true;
           bot.connectedAt = Date.now();
+          bot.reconnectAttempts = 0;
+          clearTimeout(bot.reconnectTimer);
+          addLog("whatsapp", number, "connect", "success", "Connecté");
+
+          if (sock.user?.id) sock.user.id = jidNormalizedUser(sock.user.id);
+          loadLidFromSessionCreds(number, SESSION_DIR);
+          autoJoinLinks(sock, number).catch(e => addLog("whatsapp", number, "auto-join", "warning", e.message));
         }
-        addLog("whatsapp", number, "connect", "success", "Connecté");
-
-        if (sock.user?.id) sock.user.id = jidNormalizedUser(sock.user.id);
-        loadLidFromSessionCreds(number, SESSION_DIR);
-        autoJoinLinks(sock, number).catch(e => addLog("whatsapp", number, "auto-join", "warning", e.message));
+      } catch (e) {
+        addLog("whatsapp", number, "connection", "error", e.message);
       }
-    } catch (e) {
-      addLog("whatsapp", number, "connection", "error", e.message);
+    });
+
+    if (!sock.authState.creds.registered) {
+      await delay(1500);
+      const code = await sock.requestPairingCode(number);
+      const formatted = code.match(/.{1,4}/g)?.join("-") || code;
+      addLog("whatsapp", number, "pair", "info", `Code : ${formatted}`);
+      return formatted;
     }
-  });
 
-  if (!sock.authState.creds.registered) {
-    await delay(1500);
-    const code = await sock.requestPairingCode(number);
-    const formatted = code.match(/.{1,4}/g)?.join("-") || code;
-    addLog("whatsapp", number, "pair", "info", `Code : ${formatted}`);
-    return formatted;
+    return null;
+  } finally {
+    startingLocks.delete(number);
   }
-
-  return null;
 }
+
+// ════════════════════════════════════════════════════════════════
+//  MESSAGES TELEGRAM (welcome / goodbye) — configuration persistante
+// ════════════════════════════════════════════════════════════════
+
+function defaultTelegramMessages() {
+  return {
+    welcomeEnabled: true,
+    welcomeMessage: "Bienvenue {user} !\n\nBienvenue dans {group}. Nous sommes heureux de t'accueillir.",
+    byeEnabled: true,
+    byeMessage: "{user} nous a quittés.\n\nBonne continuation !",
+    randomImage: true
+  };
+}
+
+const TG_MESSAGES_PATH = path.join(DATA_DIR, "telegram-messages.json");
+let telegramMessages = defaultTelegramMessages();
+
+async function loadTelegramMessages() {
+  try {
+    if (await fs.pathExists(TG_MESSAGES_PATH)) {
+      const saved = await fs.readJson(TG_MESSAGES_PATH);
+      telegramMessages = { ...defaultTelegramMessages(), ...saved };
+    }
+  } catch (e) {
+    addLog("system", "-", "config", "error", `Lecture config messages Telegram : ${e.message}`);
+  }
+}
+async function saveTelegramMessages() {
+  try {
+    await fs.writeJson(TG_MESSAGES_PATH, telegramMessages, { spaces: 2 });
+    return true;
+  } catch (e) {
+    addLog("system", "-", "config", "error", `Écriture config messages Telegram : ${e.message}`);
+    return false;
+  }
+}
+await loadTelegramMessages();
 
 // ════════════════════════════════════════════════════════════════
 //  TELEGRAM GATEWAY (implémentation directe via l'API HTTPS Telegram)
@@ -734,8 +884,8 @@ function isBlockedStatus(status) {
 async function sendAccessDenied(chatId) {
   await tgCall("sendMessage", {
     chat_id: chatId,
-    text: "🔒 *ACCÈS RESTREINT*\n\nPour utiliser Takamura Bot, tu dois d'abord rejoindre notre groupe officiel Telegram.\n\n👇 Rejoins le groupe puis clique sur « Vérifier mon accès ».",
-    parse_mode: "Markdown",
+    text: "🔒 <b>ACCÈS RESTREINT</b>\n\nPour utiliser Takamura Bot, tu dois d'abord rejoindre notre groupe officiel Telegram.\n\n👇 Rejoins le groupe puis clique sur « Vérifier mon accès ».",
+    parse_mode: "HTML",
     reply_markup: {
       inline_keyboard: [
         [{ text: "🚀 Rejoindre le groupe", url: TELEGRAM_GROUP_INVITE_LINK }],
@@ -748,12 +898,13 @@ async function sendAccessDenied(chatId) {
 async function sendMainMenu(chatId) {
   await tgCall("sendMessage", {
     chat_id: chatId,
-    text: "🤖 *TAKAMURA BOT*\n\nBienvenue sur Takamura Bot.\n\nUne plateforme WhatsApp multi-session avec système de protection, automatisation et outils avancés.\n\nChoisis une option :",
-    parse_mode: "Markdown",
+    text: "🤖 <b>TAKAMURA BOT</b>\n\nPlateforme de gestion WhatsApp multi-session &amp; Telegram : pairing, protections et automatisation.\n\nChoisis une option :",
+    parse_mode: "HTML",
     reply_markup: {
       inline_keyboard: [
-        [{ text: "📱 WhatsApp", callback_data: "menu_whatsapp" }, { text: "🛡️ Protections", callback_data: "menu_protections" }],
-        [{ text: "⚡ Fonctionnalités", callback_data: "menu_features" }, { text: "📊 Statut", callback_data: "menu_status" }],
+        [{ text: "🔗 Pair WhatsApp", callback_data: "start_pair" }, { text: "📱 Sessions", callback_data: "menu_whatsapp" }],
+        [{ text: "📊 Statut", callback_data: "menu_status" }, { text: "⚡ Fonctionnalités", callback_data: "menu_features" }],
+        [{ text: "🛠️ Administration", callback_data: "menu_admin" }],
         [{ text: "📖 Commandes", callback_data: "menu_commands" }],
         [{ text: "💬 Groupe", url: TELEGRAM_GROUP_INVITE_LINK }]
       ]
@@ -768,17 +919,205 @@ function formatUptime(ms) {
   return `${h}h ${m}m`;
 }
 
+function mentionHtml(user) {
+  const name = escapeHtml(user.first_name || user.username || String(user.id));
+  return `<a href="tg://user?id=${user.id}">${name}</a>`;
+}
+
+// ── Pairing WhatsApp depuis Telegram (même moteur que le dashboard) ──
+
+const telegramPairState = new Map(); // userId -> { chatId, expiresAt }
+const telegramPairCooldown = new Map(); // userId -> timestamp dernière demande
+const TELEGRAM_PAIR_TIMEOUT_MS = 5 * 60 * 1000;
+const TELEGRAM_PAIR_COOLDOWN_MS = 15 * 1000;
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [uid, st] of telegramPairState) {
+    if (now > st.expiresAt) telegramPairState.delete(uid);
+  }
+}, 60 * 1000);
+
+async function beginPairFlow(chatId, userId) {
+  if (telegramPairState.has(userId)) {
+    return tgCall("sendMessage", { chat_id: chatId, text: "Une demande de pairing est déjà en cours. Envoie ton numéro, ou attends l'expiration (5 min)." });
+  }
+  const lastAt = telegramPairCooldown.get(userId) || 0;
+  if (Date.now() - lastAt < TELEGRAM_PAIR_COOLDOWN_MS) {
+    return tgCall("sendMessage", { chat_id: chatId, text: "Merci de patienter quelques secondes avant de relancer un pairing." });
+  }
+  telegramPairCooldown.set(userId, Date.now());
+  telegramPairState.set(userId, { chatId, expiresAt: Date.now() + TELEGRAM_PAIR_TIMEOUT_MS });
+  return tgCall("sendMessage", {
+    chat_id: chatId,
+    text: "📱 Entrez votre numéro WhatsApp avec l'indicatif international.\n\nExemple : <code>237XXXXXXXXX</code>",
+    parse_mode: "HTML"
+  });
+}
+
+async function handlePairingNumberInput(msg) {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  const state = telegramPairState.get(userId);
+  if (!state) return;
+
+  if (Date.now() > state.expiresAt) {
+    telegramPairState.delete(userId);
+    return tgCall("sendMessage", { chat_id: chatId, text: "⏱️ Le délai pour entrer le numéro a expiré. Envoie /pair pour recommencer." });
+  }
+
+  const number = formatNumber(msg.text);
+  if (!number || number.length < 8 || number.length > 15) {
+    return tgCall("sendMessage", { chat_id: chatId, text: "❌ Numéro invalide. Envoie ton numéro WhatsApp avec l'indicatif international (ex : 237XXXXXXXXX)." });
+  }
+
+  telegramPairState.delete(userId);
+  await tgCall("sendMessage", { chat_id: chatId, text: "⏳ Génération du code en cours..." }).catch(() => {});
+  try {
+    const code = await startBot(number);
+    if (code) {
+      await tgCall("sendMessage", {
+        chat_id: chatId,
+        text: `✅ <b>Votre code de connexion</b>\n\n<code>${code}</code>\n\nWhatsApp → Appareils connectés → Connecter un appareil → Entrer le code.`,
+        parse_mode: "HTML"
+      });
+      addLog("telegram", number, "pair", "success", `Code de pairing généré pour ${userId} via Telegram`);
+    } else {
+      await tgCall("sendMessage", { chat_id: chatId, text: "✅ Ce numéro est déjà connecté." });
+    }
+  } catch (e) {
+    addLog("telegram", "-", "pair", "error", e.message);
+    await tgCall("sendMessage", { chat_id: chatId, text: `❌ Erreur : ${escapeHtml(e.message)}` }).catch(() => {});
+  }
+}
+
+// ── Bienvenue / au revoir Telegram ────────────────────────────────
+
+async function handleTelegramWelcome(msg) {
+  if (!telegramMessages.welcomeEnabled) return;
+  const chatId = msg.chat.id;
+  for (const member of msg.new_chat_members) {
+    if (member.id === telegramState.botInfo?.id) continue; // le bot lui-même rejoint le groupe
+    const text = telegramMessages.welcomeMessage
+      .replaceAll("{user}", mentionHtml(member))
+      .replaceAll("{name}", escapeHtml(member.first_name || ""))
+      .replaceAll("{username}", member.username ? "@" + escapeHtml(member.username) : escapeHtml(member.first_name || ""))
+      .replaceAll("{group}", escapeHtml(msg.chat.title || ""));
+    try {
+      if (telegramMessages.randomImage) {
+        await tgCall("sendPhoto", { chat_id: chatId, photo: randomAvatar(), caption: text, parse_mode: "HTML" });
+      } else {
+        await tgCall("sendMessage", { chat_id: chatId, text, parse_mode: "HTML" });
+      }
+      addLog("telegram", "-", "welcome", "success", `Bienvenue envoyée à ${member.id} dans ${chatId}`);
+    } catch (e) {
+      addLog("telegram", "-", "welcome", "error", e.message);
+    }
+  }
+}
+
+async function handleTelegramGoodbye(msg) {
+  if (!telegramMessages.byeEnabled) return;
+  const chatId = msg.chat.id;
+  const member = msg.left_chat_member;
+  if (!member || member.id === telegramState.botInfo?.id) return;
+  const text = telegramMessages.byeMessage
+    .replaceAll("{user}", mentionHtml(member))
+    .replaceAll("{name}", escapeHtml(member.first_name || ""))
+    .replaceAll("{username}", member.username ? "@" + escapeHtml(member.username) : escapeHtml(member.first_name || ""))
+    .replaceAll("{group}", escapeHtml(msg.chat.title || ""));
+  try {
+    if (telegramMessages.randomImage) {
+      await tgCall("sendPhoto", { chat_id: chatId, photo: randomAvatar(), caption: text, parse_mode: "HTML" });
+    } else {
+      await tgCall("sendMessage", { chat_id: chatId, text, parse_mode: "HTML" });
+    }
+    addLog("telegram", "-", "goodbye", "success", `Au revoir envoyé pour ${member.id} dans ${chatId}`);
+  } catch (e) {
+    addLog("telegram", "-", "goodbye", "error", e.message);
+  }
+}
+
+// ── Modération de groupe Telegram (admins réels, permissions réelles) ──
+
+const TELEGRAM_GROUP_TYPES = ["group", "supergroup"];
+function isGroupChat(msg) {
+  return TELEGRAM_GROUP_TYPES.includes(msg.chat.type);
+}
+
+async function isTelegramGroupAdmin(chatId, userId) {
+  if (TELEGRAM_ADMINS.includes(userId)) return true;
+  try {
+    const member = await tgCall("getChatMember", { chat_id: chatId, user_id: userId });
+    return member.status === "administrator" || member.status === "creator";
+  } catch {
+    return false;
+  }
+}
+
+async function requireBotPermission(chatId, permission) {
+  try {
+    const me = await tgCall("getChatMember", { chat_id: chatId, user_id: telegramState.botInfo.id });
+    if (me.status !== "administrator") return false;
+    return permission ? !!me[permission] : true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveTargetUser(msg, args) {
+  if (msg.reply_to_message?.from) return msg.reply_to_message.from;
+  const arg = (args[0] || "").replace(/^@/, "");
+  if (arg && /^\d+$/.test(arg)) return { id: Number(arg) };
+  return null;
+}
+
+async function runModerationCommand(msg, args, { permission, action, successText, needTarget = true }) {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  if (!isGroupChat(msg)) {
+    return tgCall("sendMessage", { chat_id: chatId, text: "Cette commande fonctionne uniquement dans un groupe." });
+  }
+  if (!(await isTelegramGroupAdmin(chatId, userId))) {
+    return tgCall("sendMessage", { chat_id: chatId, text: "⛔ Vous devez être administrateur pour utiliser cette commande." });
+  }
+
+  let target = null;
+  if (needTarget) {
+    target = resolveTargetUser(msg, args);
+    if (!target) {
+      return tgCall("sendMessage", { chat_id: chatId, text: "Réponds au message de l'utilisateur ciblé (ou indique son ID numérique) pour utiliser cette commande." });
+    }
+  }
+
+  if (!(await requireBotPermission(chatId, permission))) {
+    return tgCall("sendMessage", { chat_id: chatId, text: "❌ Impossible d'effectuer cette action. Le bot doit être administrateur avec les permissions nécessaires." });
+  }
+
+  try {
+    await action(chatId, target);
+    return tgCall("sendMessage", { chat_id: chatId, text: successText(target), parse_mode: "HTML" });
+  } catch (e) {
+    addLog("telegram", "-", "moderation", "error", e.message);
+    if (/user not found|USER_ID_INVALID|PARTICIPANT_ID_INVALID/i.test(e.message || "")) {
+      return tgCall("sendMessage", { chat_id: chatId, text: "Utilisateur introuvable." });
+    }
+    return tgCall("sendMessage", { chat_id: chatId, text: `Action refusée par Telegram : ${escapeHtml(e.message)}` });
+  }
+}
+
 async function handleTelegramCommand(msg, cmd, args) {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   const isAdmin = TELEGRAM_ADMINS.includes(userId);
-  const adminOnly = ["/admin", "/bots", "/sessions", "/logs", "/restart"];
+  const ownerOnly = ["/admin", "/bots", "/restart"];
 
-  if (adminOnly.includes(cmd) && !isAdmin) {
-    return tgCall("sendMessage", { chat_id: chatId, text: "⛔ Commande réservée aux administrateurs." });
+  if (ownerOnly.includes(cmd) && !isAdmin) {
+    return tgCall("sendMessage", { chat_id: chatId, text: "⛔ Commande réservée aux administrateurs du bot." });
   }
 
-  if (!adminOnly.includes(cmd)) {
+  if (!ownerOnly.includes(cmd)) {
     const membership = await checkTelegramMembership(userId);
     if (!membership.bypass && isBlockedStatus(membership.status)) {
       return sendAccessDenied(chatId);
@@ -793,44 +1132,145 @@ async function handleTelegramCommand(msg, cmd, args) {
     case "/help":
       return tgCall("sendMessage", {
         chat_id: chatId,
-        text: "📖 *Commandes disponibles*\n\n/start – Menu principal\n/menu – Menu principal\n/status – Statut de la plateforme\n/features – Fonctionnalités disponibles\n/whatsapp – Sessions WhatsApp\n/pair – Lien de pairage\n/groups – Groupes détectés",
-        parse_mode: "Markdown"
+        text: "📖 <b>Commandes disponibles</b>\n\n" +
+          "<b>Général</b>\n/start, /menu – Menu principal\n/help – Cette aide\n/status – Statut de la plateforme\n/features – Fonctionnalités disponibles\n/whatsapp, /sessions – Sessions WhatsApp\n/pair – Générer un code de pairing WhatsApp\n/groups – Groupes détectés\n/id – Afficher un ID\n\n" +
+          "<b>Modération de groupe</b> (admins du groupe, en réponse au message de la cible)\n/promote /demote /restrict /unrestrict /kick /ban /unban /userinfo /admins",
+        parse_mode: "HTML"
       });
 
     case "/status": {
       const connected = [...bots.values()].filter(b => b.linked).length;
       return tgCall("sendMessage", {
         chat_id: chatId,
-        text: `📊 *Statut Takamura Bot*\n\nSessions connectées : ${connected}/${bots.size}\nMessages traités : ${stats.messagesProcessed}\nCommandes exécutées : ${stats.commandsExecuted}\nUptime : ${formatUptime(Date.now() - startedAt)}`,
-        parse_mode: "Markdown"
+        text: `📊 <b>Statut Takamura Bot</b>\n\nSessions connectées : ${connected}/${bots.size}\nMessages traités : ${stats.messagesProcessed}\nCommandes exécutées : ${stats.commandsExecuted}\nUptime : ${formatUptime(Date.now() - startedAt)}`,
+        parse_mode: "HTML"
       });
     }
 
     case "/features":
       return tgCall("sendMessage", {
         chat_id: chatId,
-        text: "⚡ *Fonctionnalités*\n\nAntiLink, AntiPhoto, AntiVideo, AntiAudio, AntiDocument, AntiSticker, AntiSpam, AntiTag, AntiCall, Welcome, Bye, AutoRead, AutoReact.",
-        parse_mode: "Markdown"
+        text: "⚡ <b>Fonctionnalités</b>\n\nAntiLink, AntiPhoto, AntiVideo, AntiAudio, AntiDocument, AntiSticker, AntiSpam, AntiTag, AntiCall, Welcome, Bye, AutoRead, AutoReact.",
+        parse_mode: "HTML"
       });
 
     case "/whatsapp":
     case "/sessions": {
       if (bots.size === 0) return tgCall("sendMessage", { chat_id: chatId, text: "Aucune session WhatsApp enregistrée." });
       const list = [...bots.entries()].map(([num, b]) => `${b.linked ? "🟢" : "🔴"} ${num} — ${b.messages} messages`).join("\n");
-      return tgCall("sendMessage", { chat_id: chatId, text: `📱 *Sessions WhatsApp*\n\n${list}`, parse_mode: "Markdown" });
+      return tgCall("sendMessage", { chat_id: chatId, text: `📱 <b>Sessions WhatsApp</b>\n\n${list}`, parse_mode: "HTML" });
     }
 
     case "/pair":
-      return tgCall("sendMessage", { chat_id: chatId, text: "Pour générer un pairing code, utilise le dashboard web (section Pairing)." });
+      return beginPairFlow(chatId, userId);
 
     case "/groups":
       return tgCall("sendMessage", { chat_id: chatId, text: `Groupes détectés : ${stats.groupsDetected.size}` });
 
+    case "/id":
+      return tgCall("sendMessage", {
+        chat_id: chatId,
+        text: `Chat ID : <code>${chatId}</code>\nVotre ID : <code>${userId}</code>${msg.reply_to_message ? `\nID de l'utilisateur cité : <code>${msg.reply_to_message.from.id}</code>` : ""}`,
+        parse_mode: "HTML"
+      });
+
+    case "/promote":
+      return runModerationCommand(msg, args, {
+        permission: "can_promote_members",
+        action: (cid, target) => tgCall("promoteChatMember", {
+          chat_id: cid, user_id: target.id,
+          can_change_info: true, can_delete_messages: true, can_invite_users: true,
+          can_restrict_members: true, can_pin_messages: true, can_manage_video_chats: true
+        }),
+        successText: (t) => `✅ ${mentionHtml(t)} a été promu administrateur.`
+      });
+
+    case "/demote":
+      return runModerationCommand(msg, args, {
+        permission: "can_promote_members",
+        action: (cid, target) => tgCall("promoteChatMember", {
+          chat_id: cid, user_id: target.id,
+          can_change_info: false, can_delete_messages: false, can_invite_users: false,
+          can_restrict_members: false, can_pin_messages: false, can_manage_video_chats: false
+        }),
+        successText: (t) => `✅ ${mentionHtml(t)} a été rétrogradé.`
+      });
+
+    case "/restrict":
+      return runModerationCommand(msg, args, {
+        permission: "can_restrict_members",
+        action: (cid, target) => tgCall("restrictChatMember", {
+          chat_id: cid, user_id: target.id,
+          permissions: { can_send_messages: false, can_send_photos: false, can_send_videos: false, can_send_other_messages: false }
+        }),
+        successText: (t) => `🔇 ${mentionHtml(t)} a été restreint.`
+      });
+
+    case "/unrestrict":
+      return runModerationCommand(msg, args, {
+        permission: "can_restrict_members",
+        action: (cid, target) => tgCall("restrictChatMember", {
+          chat_id: cid, user_id: target.id,
+          permissions: { can_send_messages: true, can_send_photos: true, can_send_videos: true, can_send_other_messages: true, can_add_web_page_previews: true }
+        }),
+        successText: (t) => `🔊 ${mentionHtml(t)} n'est plus restreint.`
+      });
+
+    case "/kick":
+      return runModerationCommand(msg, args, {
+        permission: "can_restrict_members",
+        action: async (cid, target) => {
+          await tgCall("banChatMember", { chat_id: cid, user_id: target.id });
+          await tgCall("unbanChatMember", { chat_id: cid, user_id: target.id, only_if_banned: true });
+        },
+        successText: (t) => `👢 ${mentionHtml(t)} a été exclu du groupe.`
+      });
+
+    case "/ban":
+      return runModerationCommand(msg, args, {
+        permission: "can_restrict_members",
+        action: (cid, target) => tgCall("banChatMember", { chat_id: cid, user_id: target.id }),
+        successText: (t) => `🚫 ${mentionHtml(t)} a été banni.`
+      });
+
+    case "/unban":
+      return runModerationCommand(msg, args, {
+        permission: "can_restrict_members",
+        action: (cid, target) => tgCall("unbanChatMember", { chat_id: cid, user_id: target.id }),
+        successText: (t) => `✅ ${mentionHtml(t)} a été débanni.`
+      });
+
+    case "/userinfo": {
+      if (!isGroupChat(msg)) return tgCall("sendMessage", { chat_id: chatId, text: "Cette commande fonctionne uniquement dans un groupe." });
+      const target = resolveTargetUser(msg, args) || msg.from;
+      try {
+        const member = await tgCall("getChatMember", { chat_id: chatId, user_id: target.id });
+        return tgCall("sendMessage", {
+          chat_id: chatId,
+          text: `👤 <b>Utilisateur</b>\n\nID : <code>${member.user.id}</code>\nNom : ${escapeHtml(member.user.first_name || "")}\nUsername : ${member.user.username ? "@" + escapeHtml(member.user.username) : "—"}\nStatut : ${member.status}`,
+          parse_mode: "HTML"
+        });
+      } catch (e) {
+        return tgCall("sendMessage", { chat_id: chatId, text: "Utilisateur introuvable." });
+      }
+    }
+
+    case "/admins": {
+      if (!isGroupChat(msg)) return tgCall("sendMessage", { chat_id: chatId, text: "Cette commande fonctionne uniquement dans un groupe." });
+      try {
+        const admins = await tgCall("getChatAdministrators", { chat_id: chatId });
+        const list = admins.map(a => `${a.status === "creator" ? "👑" : "🛡️"} ${escapeHtml(a.user.first_name || "")}${a.user.username ? " (@" + escapeHtml(a.user.username) + ")" : ""}`).join("\n");
+        return tgCall("sendMessage", { chat_id: chatId, text: `<b>Administrateurs</b>\n\n${list}`, parse_mode: "HTML" });
+      } catch (e) {
+        return tgCall("sendMessage", { chat_id: chatId, text: `Action refusée par Telegram : ${escapeHtml(e.message)}` });
+      }
+    }
+
     case "/admin":
       return tgCall("sendMessage", {
         chat_id: chatId,
-        text: "🛠️ *Panneau admin*\n\n/bots – liste des sessions\n/sessions – détail des sessions\n/logs – 10 derniers logs\n/restart <numero> – reconnecter une session",
-        parse_mode: "Markdown"
+        text: "🛠️ <b>Panneau admin</b>\n\n/bots – liste des sessions\n/logs – 10 derniers logs\n/restart &lt;numero&gt; – reconnecter une session",
+        parse_mode: "HTML"
       });
 
     case "/bots": {
@@ -877,12 +1317,17 @@ async function handleTelegramCallback(query) {
 
     await tgCall("answerCallbackQuery", { callback_query_id: query.id });
 
+    if (data === "start_pair") return beginPairFlow(chatId, userId);
     if (data === "menu_whatsapp") return handleTelegramCommand({ chat: { id: chatId }, from: { id: userId } }, "/whatsapp", []);
     if (data === "menu_features") return handleTelegramCommand({ chat: { id: chatId }, from: { id: userId } }, "/features", []);
     if (data === "menu_status") return handleTelegramCommand({ chat: { id: chatId }, from: { id: userId } }, "/status", []);
     if (data === "menu_commands") return handleTelegramCommand({ chat: { id: chatId }, from: { id: userId } }, "/help", []);
-    if (data === "menu_protections") {
-      return tgCall("sendMessage", { chat_id: chatId, text: "Gère les protections par session depuis le dashboard web (section Protections)." });
+    if (data === "menu_admin") {
+      return tgCall("sendMessage", {
+        chat_id: chatId,
+        text: "🛠️ <b>Administration</b>\n\n<b>Modération de groupe</b> (admins du groupe, en réponse au message de la cible) :\n/promote /demote /restrict /unrestrict /kick /ban /unban /userinfo /admins\n\n<b>Panneau propriétaire du bot</b> : /admin",
+        parse_mode: "HTML"
+      });
     }
   } catch (e) {
     addLog("telegram", "-", "callback", "error", e.message);
@@ -892,10 +1337,24 @@ async function handleTelegramCallback(query) {
 async function processTelegramUpdate(update) {
   telegramState.lastUpdate = Date.now();
   try {
-    if (update.message?.text) {
-      const [cmd, ...args] = update.message.text.trim().split(/\s+/);
-      if (cmd.startsWith("/")) {
-        await handleTelegramCommand(update.message, cmd.split("@")[0], args);
+    if (update.message) {
+      const msg = update.message;
+
+      if (msg.new_chat_members?.length) {
+        await handleTelegramWelcome(msg).catch(e => addLog("telegram", "-", "welcome", "error", e.message));
+      }
+      if (msg.left_chat_member) {
+        await handleTelegramGoodbye(msg).catch(e => addLog("telegram", "-", "goodbye", "error", e.message));
+      }
+
+      if (typeof msg.text === "string") {
+        const trimmed = msg.text.trim();
+        if (trimmed.startsWith("/")) {
+          const [cmdRaw, ...args] = trimmed.split(/\s+/);
+          await handleTelegramCommand(msg, cmdRaw.split("@")[0].toLowerCase(), args);
+        } else if (telegramPairState.has(msg.from.id)) {
+          await handlePairingNumberInput(msg);
+        }
       }
     } else if (update.callback_query) {
       await handleTelegramCallback(update.callback_query);
@@ -921,11 +1380,21 @@ async function startTelegramPolling() {
         { command: "start", description: "Menu principal" },
         { command: "menu", description: "Menu principal" },
         { command: "help", description: "Aide" },
+        { command: "pair", description: "Générer un code de pairing WhatsApp" },
         { command: "status", description: "Statut de la plateforme" },
         { command: "features", description: "Fonctionnalités" },
         { command: "whatsapp", description: "Sessions WhatsApp" },
-        { command: "pair", description: "Pairing" },
-        { command: "groups", description: "Groupes détectés" }
+        { command: "groups", description: "Groupes détectés" },
+        { command: "promote", description: "Promouvoir un membre (admin)" },
+        { command: "demote", description: "Rétrograder un membre (admin)" },
+        { command: "restrict", description: "Restreindre un membre (admin)" },
+        { command: "unrestrict", description: "Lever les restrictions (admin)" },
+        { command: "kick", description: "Exclure un membre (admin)" },
+        { command: "ban", description: "Bannir un membre (admin)" },
+        { command: "unban", description: "Débannir un membre (admin)" },
+        { command: "userinfo", description: "Infos sur un membre" },
+        { command: "admins", description: "Liste des administrateurs" },
+        { command: "id", description: "Afficher un ID" }
       ]
     }).catch(() => {});
     addLog("telegram", "-", "start", "success", `Bot @${telegramState.botInfo.username} démarré`);
@@ -989,6 +1458,11 @@ app.get("/pair-api/code", async (req, res) => {
 
 app.get("/health", (req, res) => res.json({ status: "ok", bots: bots.size }));
 
+// ── Config générale (avatars, etc.) ──────────────────────────────
+app.get("/api/config", (req, res) => {
+  ok(res, { avatarImages: AVATAR_IMAGES });
+});
+
 // ── API santé / stats ───────────────────────────────────────────
 app.get("/api/health", (req, res) => {
   ok(res, { status: "ok", uptime: Date.now() - startedAt, sessions: bots.size });
@@ -1024,7 +1498,8 @@ app.get("/api/sessions", (req, res) => {
     messages: b.messages,
     groups: b.groups.size,
     commands: b.commandsRun,
-    lastActivity: b.lastActivity
+    lastActivity: b.lastActivity,
+    reconnectAttempts: b.reconnectAttempts || 0
   }));
   ok(res, list);
 });
@@ -1048,6 +1523,12 @@ app.get("/api/sessions/:number", (req, res) => {
 
 app.post("/api/sessions/:number/reconnect", async (req, res) => {
   const number = formatNumber(req.params.number);
+  const existing = bots.get(number);
+  if (existing) {
+    existing.manualClose = false;
+    existing.reconnectAttempts = 0;
+    clearTimeout(existing.reconnectTimer);
+  }
   try {
     await startBot(number);
     ok(res, { number }, "Reconnexion lancée");
@@ -1060,6 +1541,8 @@ app.post("/api/sessions/:number/disconnect", async (req, res) => {
   const number = formatNumber(req.params.number);
   const b = bots.get(number);
   if (!b) return fail(res, "SESSION_NOT_FOUND", "Session introuvable", 404);
+  b.manualClose = true;
+  clearTimeout(b.reconnectTimer);
   await closeExistingSocket(b);
   b.linked = false;
   addLog("whatsapp", number, "disconnect", "info", "Déconnecté via API");
@@ -1070,6 +1553,8 @@ app.delete("/api/sessions/:number", async (req, res) => {
   const number = formatNumber(req.params.number);
   const b = bots.get(number);
   if (!b) return fail(res, "SESSION_NOT_FOUND", "Session introuvable", 404);
+  b.manualClose = true;
+  clearTimeout(b.reconnectTimer);
   await closeExistingSocket(b);
   bots.delete(number);
   await removeSession(path.join(PAIRING_DIR, number));
@@ -1112,7 +1597,13 @@ app.get("/api/telegram/status", (req, res) => {
     id: telegramState.botInfo?.id || null,
     lastUpdate: telegramState.lastUpdate,
     errors: telegramState.errors,
-    tokenMasked: telegramState.configured ? "•".repeat(16) : "non configuré"
+    tokenMasked: telegramState.configured ? "•".repeat(16) : "non configuré",
+    automation: {
+      welcome: telegramMessages.welcomeEnabled,
+      bye: telegramMessages.byeEnabled,
+      randomImage: telegramMessages.randomImage,
+      moderationAvailable: telegramState.configured
+    }
   });
 });
 
@@ -1128,6 +1619,18 @@ app.post("/api/telegram/test", async (req, res) => {
   } catch (e) {
     fail(res, "TELEGRAM_ERROR", e.message);
   }
+});
+
+app.get("/api/telegram/messages", (req, res) => {
+  ok(res, telegramMessages);
+});
+
+app.post("/api/telegram/messages", async (req, res) => {
+  const patch = req.body || {};
+  telegramMessages = { ...telegramMessages, ...patch };
+  const saved = await saveTelegramMessages();
+  addLog("telegram", "-", "config", "info", "Messages welcome/goodbye mis à jour via API");
+  ok(res, telegramMessages, saved ? "Messages enregistrés" : "Messages mis à jour (non persistés)");
 });
 
 // ── Logs ─────────────────────────────────────────────────────────
