@@ -895,20 +895,86 @@ async function sendAccessDenied(chatId) {
   }).catch(() => {});
 }
 
-async function sendMainMenu(chatId) {
-  await tgCall("sendMessage", {
-    chat_id: chatId,
-    text: "🤖 <b>TAKAMURA BOT</b>\n\nPlateforme de gestion WhatsApp multi-session &amp; Telegram : pairing, protections et automatisation.\n\nChoisis une option :",
-    parse_mode: "HTML",
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: "🔗 Pair WhatsApp", callback_data: "start_pair" }, { text: "📱 Sessions", callback_data: "menu_whatsapp" }],
-        [{ text: "📊 Statut", callback_data: "menu_status" }, { text: "⚡ Fonctionnalités", callback_data: "menu_features" }],
-        [{ text: "🛠️ Administration", callback_data: "menu_admin" }],
-        [{ text: "📖 Commandes", callback_data: "menu_commands" }],
-        [{ text: "💬 Groupe", url: TELEGRAM_GROUP_INVITE_LINK }]
-      ]
+// ── Image + rendu monospace style menus WhatsApp ─────────────────
+let telegramMenuPhotoFileId = null;
+
+async function getTelegramMenuPhoto() {
+  if (telegramMenuPhotoFileId) return telegramMenuPhotoFileId;
+  try {
+    if (!telegramState.botInfo?.id) return null;
+    const photos = await tgCall("getUserProfilePhotos", {
+      user_id: telegramState.botInfo.id,
+      offset: 0,
+      limit: 1
+    });
+    const sizes = photos?.photos?.[0];
+    if (Array.isArray(sizes) && sizes.length) {
+      // Telegram nous donne un file_id permanent pour la photo du bot.
+      telegramMenuPhotoFileId = sizes[sizes.length - 1].file_id;
+      return telegramMenuPhotoFileId;
     }
+  } catch (e) {
+    addLog("telegram", "-", "menu-photo", "warning", `Photo du menu indisponible : ${e.message}`);
+  }
+  return null;
+}
+
+function telegramMainMenuKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "🔗 Pair WhatsApp", callback_data: "start_pair" }, { text: "📱 Sessions", callback_data: "menu_whatsapp" }],
+      [{ text: "📊 Statut", callback_data: "menu_status" }, { text: "⚡ Fonctionnalités", callback_data: "menu_features" }],
+      [{ text: "🛠️ Administration", callback_data: "menu_admin" }],
+      [{ text: "📖 Commandes", callback_data: "menu_commands" }],
+      [{ text: "💬 Groupe", url: TELEGRAM_GROUP_INVITE_LINK }]
+    ]
+  };
+}
+
+async function sendMainMenu(chatId) {
+  // <pre> reproduit le rendu monospace des menus de bots WhatsApp.
+  // L'image vient directement du profil Telegram du bot : aucun lien Catbox
+  // externe n'est nécessaire pour le menu.
+  const caption =
+    "╭━━〔 🤖 TAKAMURA BOT V2 〕━━╮\n" +
+    "┃\n" +
+    "┃ ⚡ WhatsApp Multi-Session\n" +
+    "┃ 📱 Telegram Gateway\n" +
+    "┃ 🛡️ Protections & Automatisation\n" +
+    "┃\n" +
+    "┣━━〔 📋 MENU PRINCIPAL 〕━━╮\n" +
+    "┃\n" +
+    "┃ 🔗 Pair WhatsApp\n" +
+    "┃ 📱 Sessions\n" +
+    "┃ 📊 Statut\n" +
+    "┃ ⚡ Fonctionnalités\n" +
+    "┃ 🛠️ Administration\n" +
+    "┃ 📖 Commandes\n" +
+    "┃\n" +
+    "╰━━━━━━━━━━━━━━━━━━━━━━╯";
+
+  const photo = await getTelegramMenuPhoto();
+  const params = {
+    chat_id: chatId,
+    caption: `<pre>${caption}</pre>`,
+    parse_mode: "HTML",
+    reply_markup: telegramMainMenuKeyboard()
+  };
+
+  try {
+    if (photo) {
+      return await tgCall("sendPhoto", { ...params, photo });
+    }
+  } catch (e) {
+    addLog("telegram", "-", "menu-photo", "warning", `Envoi de la photo du menu échoué : ${e.message}`);
+  }
+
+  // Aucun avatar configuré sur le bot : le menu reste fonctionnel sans image.
+  return tgCall("sendMessage", {
+    chat_id: chatId,
+    text: params.caption,
+    parse_mode: "HTML",
+    reply_markup: params.reply_markup
   });
 }
 
@@ -1132,9 +1198,24 @@ async function handleTelegramCommand(msg, cmd, args) {
     case "/help":
       return tgCall("sendMessage", {
         chat_id: chatId,
-        text: "📖 <b>Commandes disponibles</b>\n\n" +
-          "<b>Général</b>\n/start, /menu – Menu principal\n/help – Cette aide\n/status – Statut de la plateforme\n/features – Fonctionnalités disponibles\n/whatsapp, /sessions – Sessions WhatsApp\n/pair – Générer un code de pairing WhatsApp\n/groups – Groupes détectés\n/id – Afficher un ID\n\n" +
-          "<b>Modération de groupe</b> (admins du groupe, en réponse au message de la cible)\n/promote /demote /restrict /unrestrict /kick /ban /unban /userinfo /admins",
+        text: `<pre>╭━━〔 📖 COMMANDES 〕━━╮
+┃
+┃ /start /menu — Menu principal
+┃ /help — Cette aide
+┃ /status — Statut
+┃ /features — Fonctionnalités
+┃ /whatsapp /sessions — Sessions WhatsApp
+┃ /pair — Pairing WhatsApp
+┃ /groups — Groupes détectés
+┃ /id — Afficher un ID
+┃
+┣━━〔 🛡️ MODÉRATION 〕
+┃ /promote /demote
+┃ /restrict /unrestrict
+┃ /kick /ban /unban
+┃ /userinfo /admins
+┃
+╰━━━━━━━━━━━━━━━━━━━━╯</pre>`,
         parse_mode: "HTML"
       });
 
@@ -1142,7 +1223,14 @@ async function handleTelegramCommand(msg, cmd, args) {
       const connected = [...bots.values()].filter(b => b.linked).length;
       return tgCall("sendMessage", {
         chat_id: chatId,
-        text: `📊 <b>Statut Takamura Bot</b>\n\nSessions connectées : ${connected}/${bots.size}\nMessages traités : ${stats.messagesProcessed}\nCommandes exécutées : ${stats.commandsExecuted}\nUptime : ${formatUptime(Date.now() - startedAt)}`,
+        text: `<pre>╭━━〔 📊 TAKAMURA STATUS 〕━━╮
+┃
+┃ 🟢 Sessions : ${connected}/${bots.size}
+┃ 📨 Messages : ${stats.messagesProcessed}
+┃ ⚡ Commandes : ${stats.commandsExecuted}
+┃ ⏱️ Uptime : ${formatUptime(Date.now() - startedAt)}
+┃
+╰━━━━━━━━━━━━━━━━━━━━━━╯</pre>`,
         parse_mode: "HTML"
       });
     }
@@ -1150,7 +1238,17 @@ async function handleTelegramCommand(msg, cmd, args) {
     case "/features":
       return tgCall("sendMessage", {
         chat_id: chatId,
-        text: "⚡ <b>Fonctionnalités</b>\n\nAntiLink, AntiPhoto, AntiVideo, AntiAudio, AntiDocument, AntiSticker, AntiSpam, AntiTag, AntiCall, Welcome, Bye, AutoRead, AutoReact.",
+        text: `<pre>╭━━〔 ⚡ FONCTIONNALITÉS 〕━━╮
+┃
+┃ 🛡️ AntiLink
+┃ 🖼️ AntiPhoto   🎬 AntiVideo
+┃ 🎵 AntiAudio   📄 AntiDocument
+┃ 🏷️ AntiSticker  🚫 AntiSpam
+┃ 👥 AntiTag     📵 AntiCall
+┃ 👋 Welcome     🚪 Bye
+┃ 👀 AutoRead    ❤️ AutoReact
+┃
+╰━━━━━━━━━━━━━━━━━━━━━━╯</pre>`,
         parse_mode: "HTML"
       });
 
