@@ -9,6 +9,9 @@ import { fileURLToPath } from "url";
 import chalk from "chalk";
 import axios from "axios";
 import FormData from "form-data";
+import ffmpegPath from "ffmpeg-static";
+import ffmpeg from "fluent-ffmpeg";
+import { Sticker, StickerTypes } from "wa-sticker-formatter";
 
 import {
   makeWASocket,
@@ -18,8 +21,15 @@ import {
   makeCacheableSignalKeyStore,
   delay,
   jidNormalizedUser,
-  DisconnectReason
+  DisconnectReason,
+  downloadMediaMessage
 } from "@whiskeysockets/baileys";
+
+// ffmpeg-static fournit un binaire ffmpeg autonome (pas besoin de l'installer
+// sur le système). On force son chemin pour fluent-ffmpeg ET pour toute
+// librairie tierce (ex. wa-sticker-formatter) qui respecte FFMPEG_PATH.
+process.env.FFMPEG_PATH = ffmpegPath;
+ffmpeg.setFfmpegPath(ffmpegPath);
 
 // ════════════════════════════════════════════════════════════════
 //  CONFIGURATION INTERNE
@@ -306,6 +316,248 @@ async function loadCommands() {
   return commands;
 }
 
+// ════════════════════════════════════════════════════════════════
+//  COMMANDES MÉDIA INTÉGRÉES (directement dans index.js, comme demandé)
+//  - .tg-sticker <lien du pack> [numéro]  → sticker Telegram vers WhatsApp
+//  - .compress <25|50|80>                 → compression vidéo par palier
+//  Les deux commandes s'enregistrent comme n'importe quelle commande
+//  chargée depuis ./commands (même Map bot.commands, mêmes permissions
+//  owner, même réaction ✅ automatique, mêmes logs).
+// ════════════════════════════════════════════════════════════════
+
+const MEDIA_TMP_DIR = path.join(__dirname, "tmp");
+await fs.ensureDir(MEDIA_TMP_DIR);
+
+function humanSize(bytes) {
+  if (!bytes && bytes !== 0) return "?";
+  const units = ["o", "Ko", "Mo", "Go"];
+  let i = 0, val = bytes;
+  while (val >= 1024 && i < units.length - 1) { val /= 1024; i++; }
+  return `${val.toFixed(2)} ${units[i]}`;
+}
+
+// Accepte un lien complet (https://t.me/addstickers/NomDuPack) ou
+// directement le nom court du pack collé par l'utilisateur.
+function extractTelegramStickerPack(link) {
+  const raw = String(link || "").trim();
+  const m = raw.match(/t\.me\/addstickers\/([A-Za-z0-9_]+)/i);
+  if (m) return m[1];
+  if (/^[A-Za-z0-9_]+$/.test(raw)) return raw;
+  return null;
+}
+
+async function fetchTelegramFileBuffer(filePath) {
+  const url = `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${filePath}`;
+  const res = await axios.get(url, { responseType: "arraybuffer" });
+  return Buffer.from(res.data);
+}
+
+// ── .tg-sticker ─────────────────────────────────────────────────
+const tgStickerCommand = {
+  name: "tg-sticker",
+  description: "Convertit un sticker Telegram (lien du pack) en sticker WhatsApp",
+  execute: async (sock, ctx, args) => {
+    const link = args[0];
+    const index = Math.max(1, parseInt(args[1], 10) || 1);
+
+    if (!link) {
+      return ctx.reply(
+        "Usage : .tg-sticker <lien du pack Telegram> [numéro]\n" +
+        "Exemple : .tg-sticker https://t.me/addstickers/NomDuPack 1\n" +
+        "Le lien s'obtient en ouvrant un sticker Telegram puis \"Ajouter des stickers\"."
+      );
+    }
+    if (!telegramState.configured) {
+      return ctx.reply("Le bot Telegram n'est pas configuré côté serveur, impossible de récupérer le sticker.");
+    }
+
+    const packName = extractTelegramStickerPack(link);
+    if (!packName) {
+      return ctx.reply("Lien invalide. Envoie un lien du type https://t.me/addstickers/NomDuPack");
+    }
+
+    let set;
+    try {
+      set = await tgCall("getStickerSet", { name: packName });
+    } catch (e) {
+      return ctx.reply(`Pack Telegram introuvable : ${e.message}`);
+    }
+
+    const stickers = set.stickers || [];
+    if (!stickers.length) return ctx.reply("Ce pack ne contient aucun sticker.");
+    const sticker = stickers[Math.min(index, stickers.length) - 1];
+
+    if (sticker.is_animated) {
+      return ctx.reply(
+        `Le sticker #${index} est un sticker animé Lottie (.tgs), non convertible pour le moment.\n` +
+        `Le pack contient ${stickers.length} sticker(s) — essaie un autre numéro (idéalement statique ou vidéo).`
+      );
+    }
+
+    let file;
+    try {
+      file = await tgCall("getFile", { file_id: sticker.file_id });
+    } catch (e) {
+      return ctx.reply(`Impossible de récupérer le fichier Telegram : ${e.message}`);
+    }
+
+    let buffer;
+    try {
+      buffer = await fetchTelegramFileBuffer(file.file_path);
+    } catch (e) {
+      return ctx.reply(`Téléchargement du sticker Telegram échoué : ${e.message}`);
+    }
+
+    try {
+      const wsSticker = new Sticker(buffer, {
+        pack: "Takamura Bot",
+        author: "Takamura V2",
+        type: StickerTypes.FULL,
+        quality: 70,
+        background: "transparent"
+      });
+      const webpBuffer = await wsSticker.toBuffer();
+
+      await sock.sendMessage(ctx.from, { sticker: webpBuffer });
+      // Option "télécharger" : le même sticker renvoyé en document,
+      // ce qui affiche le bouton de téléchargement natif WhatsApp.
+      await sock.sendMessage(ctx.from, {
+        document: webpBuffer,
+        fileName: `sticker-${packName}-${index}.webp`,
+        mimetype: "image/webp",
+        caption: "📥 Sticker converti — fichier téléchargeable"
+      });
+    } catch (e) {
+      addLog("whatsapp", process.env.NUMBER || "-", "tg-sticker", "error", e.message);
+      return ctx.reply(`Conversion du sticker échouée : ${e.message}`);
+    }
+  }
+};
+
+// ── .compress ───────────────────────────────────────────────────
+const COMPRESS_PRESETS = [25, 50, 80];
+
+// Cœur de la compression, partagé entre la commande WhatsApp .compress
+// et la route web POST /api/compress-video.
+async function compressVideoBuffer(buffer, percent, onProgress) {
+  const jobId = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  const inputPath = path.join(MEDIA_TMP_DIR, `in-${jobId}.mp4`);
+  const outputPath = path.join(MEDIA_TMP_DIR, `out-${jobId}.mp4`);
+  try {
+    await fs.writeFile(inputPath, buffer);
+    const originalSize = buffer.length;
+
+    const probe = await new Promise((resolve, reject) => {
+      ffmpeg.ffprobe(inputPath, (err, data) => (err ? reject(err) : resolve(data)));
+    });
+    const duration = probe.format?.duration || 0;
+    if (!duration) throw new Error("Durée de la vidéo introuvable.");
+
+    // Bitrate cible calculé à partir du bitrate d'origine (taille/durée),
+    // avec une marge de 10% pour compenser le surcoût du conteneur/audio,
+    // et un plancher pour garder une vidéo exploitable.
+    const originalBitrate = Math.round((originalSize * 8) / duration);
+    const targetVideoBitrate = Math.max(Math.round(originalBitrate * (1 - percent / 100) * 0.9), 80000);
+    const targetAudioBitrate = percent >= 80 ? 48000 : percent >= 50 ? 64000 : 96000;
+
+    if (onProgress) onProgress("encoding");
+
+    await new Promise((resolve, reject) => {
+      ffmpeg(inputPath)
+        .videoCodec("libx264")
+        .audioCodec("aac")
+        .outputOptions([
+          `-b:v ${targetVideoBitrate}`,
+          `-maxrate ${Math.round(targetVideoBitrate * 1.5)}`,
+          `-bufsize ${Math.round(targetVideoBitrate * 2)}`,
+          `-b:a ${targetAudioBitrate}`,
+          "-preset fast",
+          "-movflags +faststart"
+        ])
+        .on("error", reject)
+        .on("end", resolve)
+        .save(outputPath);
+    });
+
+    const outBuffer = await fs.readFile(outputPath);
+    const reduction = Math.round((1 - outBuffer.length / originalSize) * 100);
+    return { buffer: outBuffer, originalSize, compressedSize: outBuffer.length, reduction };
+  } finally {
+    await fs.remove(inputPath).catch(() => {});
+    await fs.remove(outputPath).catch(() => {});
+  }
+}
+
+const compressCommand = {
+  name: "compress",
+  description: "Compresse une vidéo (réduction visée ~25%, 50% ou 80%)",
+  execute: async (sock, ctx, args) => {
+    const percent = parseInt(args[0], 10);
+    if (!COMPRESS_PRESETS.includes(percent)) {
+      return ctx.reply(
+        "Usage : .compress <25|50|80>\n" +
+        "Envoie une vidéo avec cette commande en légende, ou réponds à une vidéo avec .compress <25|50|80>.\n" +
+        "Exemple : .compress 50"
+      );
+    }
+
+    const rawMsg = ctx.raw;
+    const quoted = ctx.quoted;
+    let videoMessage = rawMsg.message?.videoMessage || null;
+    let sourceMessage = rawMsg;
+
+    if (!videoMessage && quoted?.videoMessage) {
+      videoMessage = quoted.videoMessage;
+      const contextInfo = rawMsg.message?.extendedTextMessage?.contextInfo;
+      sourceMessage = {
+        key: {
+          remoteJid: ctx.from,
+          id: contextInfo?.stanzaId,
+          participant: contextInfo?.participant,
+          fromMe: false
+        },
+        message: quoted
+      };
+    }
+
+    if (!videoMessage) {
+      return ctx.reply("Envoie une vidéo avec .compress <25|50|80> en légende, ou réponds à une vidéo avec cette commande.");
+    }
+
+    try {
+      const buffer = await downloadMediaMessage(
+        sourceMessage,
+        "buffer",
+        {},
+        { logger: pino({ level: "silent" }), reuploadRequest: sock.updateMediaMessage }
+      );
+
+      await ctx.reply(`⏳ Compression en cours (~${percent}% de réduction visée)...`);
+
+      const { buffer: outBuffer, originalSize, compressedSize, reduction } = await compressVideoBuffer(buffer, percent);
+
+      const caption =
+        "✅ Vidéo compressée\n" +
+        `Avant : ${humanSize(originalSize)}\n` +
+        `Après : ${humanSize(compressedSize)}\n` +
+        `Réduction réelle : ${reduction}%`;
+
+      await sock.sendMessage(ctx.from, { video: outBuffer, caption, mimetype: "video/mp4" });
+      // Option "télécharger" : renvoi en document pour le bouton de
+      // téléchargement natif WhatsApp.
+      await sock.sendMessage(ctx.from, {
+        document: outBuffer,
+        fileName: `compressed-${percent}.mp4`,
+        mimetype: "video/mp4",
+        caption: "📥 Télécharger la vidéo compressée"
+      });
+    } catch (e) {
+      addLog("whatsapp", process.env.NUMBER || "-", "compress", "error", e.message);
+      await ctx.reply(`Compression échouée : ${e.message}`);
+    }
+  }
+};
+
 function loadLidFromSessionCreds(number, sessionDir) {
   const credsPath = path.join(sessionDir, "creds.json");
   try {
@@ -363,6 +615,16 @@ function defaultProtectionConfig() {
 
 function protectionConfigPath(sessionDir) {
   return path.join(sessionDir, "protection.json");
+}
+
+// Un préfixe vide, avec espace(s), ou trop long romprait le parsing des
+// commandes (text.slice(prefix.length)...) — on le valide donc avant
+// de l'appliquer. Retourne null si invalide, laissant l'appelant
+// retomber sur "." par défaut.
+function sanitizePrefix(raw) {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed || /\s/.test(trimmed) || trimmed.length > 5) return null;
+  return trimmed;
 }
 
 // Config par défaut "globale" — sert de base à toute nouvelle session,
@@ -565,7 +827,7 @@ async function runProtections(sock, bot, number, msg, remoteJid, participant, se
 
 const MAX_RECONNECT_ATTEMPTS = 10;
 
-async function startBot(inputNumber) {
+async function startBot(inputNumber, options = {}) {
   const number = formatNumber(inputNumber);
   if (!number || number.length < 8) throw new Error("Numéro invalide");
 
@@ -613,8 +875,14 @@ async function startBot(inputNumber) {
     sock.ev.on("creds.update", saveCreds);
 
     const commands = await loadCommands();
+    // Commandes ajoutées directement dans index.js (voir plus haut) :
+    // écrasent toute commande de même nom chargée depuis ./commands.
+    commands.set(tgStickerCommand.name, tgStickerCommand);
+    commands.set(compressCommand.name, compressCommand);
     const config = await loadProtectionConfig(SESSION_DIR);
     if (!config.owners) config.owners = [];
+    const requestedPrefix = sanitizePrefix(options.prefix);
+    if (requestedPrefix) config.prefix = requestedPrefix;
     const features = {
       autoread: config.autoread,
       autoreact: config.autoreact,
@@ -642,6 +910,10 @@ async function startBot(inputNumber) {
       reconnectTimer: null
     });
     addLog("whatsapp", number, "start", "info", "Bot lancé");
+    if (requestedPrefix) {
+      await saveProtectionConfig(number);
+      addLog("whatsapp", number, "prefix", "info", `Préfixe des commandes défini sur "${requestedPrefix}"`);
+    }
 
     sock.ev.on("messages.upsert", async ({ messages }) => {
       try {
@@ -1746,12 +2018,12 @@ app.post("/api/admin/login", (req, res) => {
   return fail(res, "INVALID_CREDENTIALS", "Identifiants invalides", 401);
 });
 
-// ── Pairing (conservé, inchangé côté contrat) ──────────────────
+// ── Pairing (conservé, inchangé côté contrat, + préfixe optionnel) ──
 app.get("/pair-api/code", async (req, res) => {
-  const { number } = req.query;
+  const { number, prefix } = req.query;
   if (!number) return res.json({ error: "Numéro requis" });
   try {
-    const code = await startBot(number);
+    const code = await startBot(number, { prefix });
     if (code) return res.json({ code });
     return res.json({ status: "connected" });
   } catch (err) {
@@ -1761,6 +2033,36 @@ app.get("/pair-api/code", async (req, res) => {
 });
 
 app.get("/health", (req, res) => res.json({ status: "ok", bots: bots.size }));
+
+// ── Compression vidéo (outil web public, sans authentification) ──
+// Le corps de la requête est le fichier vidéo brut (Content-Type
+// quelconque, non parsé par express.json/urlencoded ci-dessus car ce
+// n'est ni du JSON ni de l'urlencoded — express.raw le récupère donc
+// intact). ?percent=25|50|80 choisit le palier de compression.
+app.post("/api/compress-video", express.raw({ limit: "300mb", type: () => true }), async (req, res) => {
+  const percent = parseInt(req.query.percent, 10);
+  if (!COMPRESS_PRESETS.includes(percent)) {
+    return fail(res, "BAD_PERCENT", "Le paramètre percent doit valoir 25, 50 ou 80", 400);
+  }
+  if (!Buffer.isBuffer(req.body) || !req.body.length) {
+    return fail(res, "NO_FILE", "Aucun fichier vidéo reçu", 400);
+  }
+  try {
+    const { buffer, originalSize, compressedSize, reduction } = await compressVideoBuffer(req.body, percent);
+    addLog("system", "-", "compress-web", "success", `Vidéo compressée : ${humanSize(originalSize)} → ${humanSize(compressedSize)} (${reduction}%)`);
+    res.set({
+      "Content-Type": "video/mp4",
+      "Content-Disposition": `attachment; filename="compressed-${percent}.mp4"`,
+      "X-Original-Size": String(originalSize),
+      "X-Compressed-Size": String(compressedSize),
+      "X-Reduction-Percent": String(reduction)
+    });
+    res.send(buffer);
+  } catch (e) {
+    addLog("system", "-", "compress-web", "error", e.message);
+    fail(res, "COMPRESS_FAILED", e.message || "Compression échouée", 500);
+  }
+});
 
 // ── Config générale (avatars, liens communauté, etc.) ─────────────
 app.get("/api/config", (req, res) => {

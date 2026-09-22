@@ -231,6 +231,26 @@
 
   .action-select{width:104px;}
 
+  /* ── Outil de compression vidéo ──────────────────────── */
+  .upload-drop{border:1.5px dashed var(--border);border-radius:var(--radius);padding:26px 16px;text-align:center;cursor:pointer;transition:.15s;}
+  .upload-drop:hover{border-color:rgba(255,255,255,.25);background:rgba(255,255,255,.02);}
+  .upload-drop.dragover{border-color:var(--accent);background:var(--accent-soft);}
+  .upload-drop.has-file{border-style:solid;border-color:var(--accent);}
+  .percent-choice{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;}
+  .percent-btn{flex:1;min-width:90px;text-align:center;padding:14px 10px;border-radius:12px;
+    border:1px solid var(--border);background:var(--surface-hover);cursor:pointer;transition:.15s;
+    font-family:var(--mono);font-size:15px;font-weight:600;color:var(--text);}
+  .percent-btn:hover{border-color:rgba(255,255,255,.25);}
+  .percent-btn.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-2);}
+  .progress-bar{height:6px;border-radius:999px;background:var(--surface-hover);overflow:hidden;margin-top:12px;}
+  .progress-bar .fill{height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--accent-2));transition:width .25s ease;}
+  .compress-result{margin-top:20px;padding-top:18px;border-top:1px solid var(--border);}
+  .compress-stats{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:14px;}
+  .compress-stats .stat{flex:1;min-width:110px;}
+  .compress-stats .stat .k{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:4px;}
+  .compress-stats .stat .v{font-size:17px;font-weight:600;}
+  #compressPreview{width:100%;max-height:360px;border-radius:var(--radius);border:1px solid var(--border);background:#000;display:block;}
+
   /* ── Pairing ─────────────────────────────────────────── */
   .pairing-hero{
     position:relative;overflow:hidden;
@@ -382,6 +402,10 @@
           <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.5-1.5"/></svg></span>
           Pairing
         </div>
+        <div class="nav-item" data-target="compress">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg></span>
+          Compresser
+        </div>
         <a class="nav-item" href="https://t.me/takamura_v2_bot" target="_blank" rel="noopener noreferrer" data-external="true">
           <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m22 2-20 8.5 6.5 2.2M22 2l-3.5 18-9-6.7M22 2 8.5 12.7"/></svg></span>
           Bot Telegram
@@ -494,9 +518,53 @@
               <label>Numéro WhatsApp</label>
               <input type="text" id="pairNumber" placeholder="ex: 237690000000" />
             </div>
+            <div class="field" style="max-width:130px;min-width:110px;flex:0 0 auto;">
+              <label>Préfixe</label>
+              <input type="text" id="pairPrefix" placeholder="." value="." maxlength="5" />
+            </div>
             <button class="btn" id="pairBtn">Générer le code</button>
           </div>
+          <div class="desc" style="margin:10px 0 0;">Le préfixe déclenche tes commandes WhatsApp (ex : <code>.menu</code>). Requis pour lancer le pairing — <code>.</code> par défaut.</div>
           <div id="pairResult"></div>
+        </div>
+      </section>
+
+      <!-- COMPRESSER (public) -->
+      <section class="section" id="sec-compress">
+        <div class="panel">
+          <h2>🎬 Compresser une vidéo</h2>
+          <div class="desc">Choisis une vidéo, un taux de réduction, puis récupère le fichier compressé — directement depuis le navigateur.</div>
+
+          <div class="upload-drop" id="compressDropZone">
+            <input type="file" id="compressFileInput" accept="video/*" style="display:none;">
+            <div id="compressDropLabel">
+              <div style="font-size:14px;font-weight:500;margin-bottom:4px;" id="compressFileName">Clique ou dépose une vidéo ici</div>
+              <div style="font-size:12px;color:var(--muted);">MP4, MOV, MKV… jusqu'à environ 300 Mo</div>
+            </div>
+          </div>
+
+          <div class="percent-choice">
+            <div class="percent-btn" data-percent="25">-25%</div>
+            <div class="percent-btn" data-percent="50">-50%</div>
+            <div class="percent-btn" data-percent="80">-80%</div>
+          </div>
+
+          <button class="btn" id="compressBtn" disabled>Compresser</button>
+
+          <div id="compressProgressWrap" style="display:none;margin-top:16px;">
+            <div class="desc" id="compressStatusText" style="margin-bottom:0;">Envoi en cours…</div>
+            <div class="progress-bar"><div class="fill" id="compressProgressFill"></div></div>
+          </div>
+
+          <div id="compressResult" class="compress-result" style="display:none;">
+            <div class="compress-stats">
+              <div class="stat"><div class="k">Avant</div><div class="v" id="compressSizeBefore">—</div></div>
+              <div class="stat"><div class="k">Après</div><div class="v" id="compressSizeAfter">—</div></div>
+              <div class="stat"><div class="k">Réduction</div><div class="v" id="compressReduction">—</div></div>
+            </div>
+            <video id="compressPreview" controls></video>
+            <a class="btn" id="compressDownloadBtn" style="margin-top:14px;display:inline-flex;" download="compressed.mp4">📥 Télécharger la vidéo compressée</a>
+          </div>
         </div>
       </section>
 
@@ -903,14 +971,17 @@
   // ── Pairing ─────────────────────────────────────────────────
   document.getElementById("pairBtn").addEventListener("click", async () => {
     const input = document.getElementById("pairNumber");
+    const prefixInput = document.getElementById("pairPrefix");
     const number = input.value.replace(/\D/g,"");
+    const prefix = prefixInput.value.trim();
     const resultBox = document.getElementById("pairResult");
     if (!number || number.length < 8){ toast("Numéro invalide", "error"); return; }
+    if (!prefix || /\s/.test(prefix)){ toast("Le préfixe est requis (sans espace) — \".\" par défaut", "error"); prefixInput.focus(); return; }
     const btn = document.getElementById("pairBtn");
     btn.disabled = true; btn.textContent = "Génération…";
     resultBox.innerHTML = '<div class="empty">Connexion à WhatsApp…</div>';
     try{
-      const res = await fetch(`/pair-api/code?number=${encodeURIComponent(number)}`);
+      const res = await fetch(`/pair-api/code?number=${encodeURIComponent(number)}&prefix=${encodeURIComponent(prefix)}`);
       const json = await res.json();
       if (json.error){
         resultBox.innerHTML = `<div class="empty">Erreur : ${json.error}</div>`;
@@ -938,6 +1009,136 @@
       btn.disabled = false; btn.textContent = "Générer le code";
     }
   });
+
+  // ── Compression vidéo ─────────────────────────────────────────
+  (function(){
+    const dropZone = document.getElementById("compressDropZone");
+    const fileInput = document.getElementById("compressFileInput");
+    const fileNameLabel = document.getElementById("compressFileName");
+    const percentBtns = document.querySelectorAll(".percent-btn");
+    const compressBtn = document.getElementById("compressBtn");
+    const progressWrap = document.getElementById("compressProgressWrap");
+    const progressFill = document.getElementById("compressProgressFill");
+    const statusText = document.getElementById("compressStatusText");
+    const resultBox = document.getElementById("compressResult");
+    const sizeBefore = document.getElementById("compressSizeBefore");
+    const sizeAfter = document.getElementById("compressSizeAfter");
+    const reductionEl = document.getElementById("compressReduction");
+    const preview = document.getElementById("compressPreview");
+    const downloadBtn = document.getElementById("compressDownloadBtn");
+
+    let selectedFile = null;
+    let selectedPercent = null;
+    let lastObjectUrl = null;
+
+    function humanSize(bytes){
+      if (bytes === null || bytes === undefined || isNaN(bytes)) return "—";
+      const units = ["o","Ko","Mo","Go"];
+      let i = 0, val = Number(bytes);
+      while (val >= 1024 && i < units.length - 1){ val /= 1024; i++; }
+      return `${val.toFixed(2)} ${units[i]}`;
+    }
+
+    function updateCompressBtnState(){
+      compressBtn.disabled = !(selectedFile && selectedPercent);
+    }
+
+    function setFile(file){
+      if (!file) return;
+      if (!file.type.startsWith("video/")){
+        toast("Sélectionne un fichier vidéo", "error");
+        return;
+      }
+      selectedFile = file;
+      fileNameLabel.textContent = `${file.name} (${humanSize(file.size)})`;
+      dropZone.classList.add("has-file");
+      resultBox.style.display = "none";
+      updateCompressBtnState();
+    }
+
+    dropZone.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", () => setFile(fileInput.files[0]));
+
+    ["dragenter","dragover"].forEach(evt => dropZone.addEventListener(evt, (e) => {
+      e.preventDefault(); dropZone.classList.add("dragover");
+    }));
+    ["dragleave","drop"].forEach(evt => dropZone.addEventListener(evt, (e) => {
+      e.preventDefault(); dropZone.classList.remove("dragover");
+    }));
+    dropZone.addEventListener("drop", (e) => {
+      const file = e.dataTransfer?.files?.[0];
+      if (file) setFile(file);
+    });
+
+    percentBtns.forEach(btn => {
+      btn.addEventListener("click", () => {
+        percentBtns.forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        selectedPercent = btn.dataset.percent;
+        updateCompressBtnState();
+      });
+    });
+
+    compressBtn.addEventListener("click", () => {
+      if (!selectedFile || !selectedPercent) return;
+      compressBtn.disabled = true;
+      resultBox.style.display = "none";
+      progressWrap.style.display = "block";
+      progressFill.style.width = "0%";
+      statusText.textContent = "Envoi de la vidéo…";
+
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `/api/compress-video?percent=${selectedPercent}`);
+      xhr.responseType = "blob";
+
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return;
+        const pct = Math.round((e.loaded / e.total) * 100);
+        progressFill.style.width = pct + "%";
+        statusText.textContent = pct < 100 ? `Envoi de la vidéo… ${pct}%` : "Compression côté serveur… (peut prendre un moment)";
+      };
+
+      xhr.onload = () => {
+        progressWrap.style.display = "none";
+        compressBtn.disabled = false;
+        if (xhr.status >= 200 && xhr.status < 300){
+          const blob = xhr.response;
+          const originalSize = xhr.getResponseHeader("X-Original-Size");
+          const compressedSize = xhr.getResponseHeader("X-Compressed-Size");
+          const reduction = xhr.getResponseHeader("X-Reduction-Percent");
+
+          if (lastObjectUrl) URL.revokeObjectURL(lastObjectUrl);
+          lastObjectUrl = URL.createObjectURL(blob);
+
+          sizeBefore.textContent = humanSize(originalSize ?? selectedFile.size);
+          sizeAfter.textContent = humanSize(compressedSize ?? blob.size);
+          reductionEl.textContent = (reduction ?? "?") + "%";
+          preview.src = lastObjectUrl;
+          downloadBtn.href = lastObjectUrl;
+          downloadBtn.download = `compressed-${selectedPercent}.mp4`;
+          resultBox.style.display = "block";
+          toast("Vidéo compressée avec succès", "success");
+        } else {
+          const reader = new FileReader();
+          reader.onload = () => {
+            let msg = "Compression échouée";
+            try { msg = JSON.parse(reader.result)?.error?.message || msg; } catch(_){}
+            toast(msg, "error");
+          };
+          reader.onerror = () => toast("Compression échouée", "error");
+          reader.readAsText(xhr.response);
+        }
+      };
+
+      xhr.onerror = () => {
+        progressWrap.style.display = "none";
+        compressBtn.disabled = false;
+        toast("Erreur réseau pendant l'envoi", "error");
+      };
+
+      xhr.send(selectedFile);
+    });
+  })();
 
   // ── Protections ─────────────────────────────────────────────
   const PROT_DEFS = [
