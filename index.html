@@ -202,13 +202,60 @@
   .action-select{width:104px;}
 
   /* ── Pairing ─────────────────────────────────────────── */
+  .pairing-hero{
+    position:relative;overflow:hidden;
+    background:linear-gradient(135deg, rgba(124,108,246,.16), rgba(34,211,238,.08) 60%, transparent);
+    border:1px solid var(--border);border-radius:var(--radius-lg);
+    padding:26px 22px;margin-bottom:18px;
+  }
+  .pairing-hero::before{
+    content:"";position:absolute;top:-60px;right:-60px;width:220px;height:220px;border-radius:50%;
+    background:radial-gradient(circle, rgba(124,108,246,.35), transparent 70%);
+    filter:blur(4px);pointer-events:none;
+  }
+  .pairing-hero::after{
+    content:"";position:absolute;bottom:-70px;left:-40px;width:180px;height:180px;border-radius:50%;
+    background:radial-gradient(circle, rgba(34,211,238,.22), transparent 70%);
+    pointer-events:none;
+  }
+  .pairing-hero-top{display:flex;align-items:center;gap:14px;position:relative;z-index:1;}
+  .pairing-hero-icon{
+    width:46px;height:46px;border-radius:13px;flex-shrink:0;
+    background:linear-gradient(135deg, var(--accent), var(--accent-2));
+    display:flex;align-items:center;justify-content:center;
+    box-shadow:0 6px 18px rgba(124,108,246,.35);
+  }
+  .pairing-hero-icon svg{width:22px;height:22px;color:#fff;}
+  .pairing-hero h1{font-size:18px;margin:0 0 3px;letter-spacing:-.01em;}
+  .pairing-hero p{margin:0;font-size:12.5px;color:var(--muted);}
+  .pairing-steps{
+    display:flex;gap:10px;margin-top:20px;position:relative;z-index:1;flex-wrap:wrap;
+  }
+  .pairing-step{
+    flex:1;min-width:140px;background:rgba(255,255,255,.03);border:1px solid var(--border);
+    border-radius:11px;padding:12px 13px;
+  }
+  .pairing-step .num{
+    width:20px;height:20px;border-radius:50%;background:var(--accent-soft);color:var(--accent-2);
+    font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-bottom:8px;
+  }
+  .pairing-step .txt{font-size:12px;color:var(--muted);line-height:1.45;}
+
   .pair-box{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;}
   .pair-box .field{flex:1;min-width:200px;}
   .code-display{
-    margin-top:16px;padding:18px;border:1px solid var(--border);border-radius:var(--radius);
-    background:var(--accent-soft);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+    margin-top:16px;padding:20px;border:1px solid rgba(124,108,246,.35);border-radius:var(--radius);
+    background:linear-gradient(135deg, var(--accent-soft), rgba(34,211,238,.08));
+    display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+    animation:pairPop .25s ease;
+    box-shadow:0 0 0 1px rgba(124,108,246,.08), 0 8px 24px rgba(124,108,246,.12);
   }
-  .code-display .code{font-size:22px;font-weight:600;letter-spacing:2px;color:var(--accent-2);font-family:var(--mono);}
+  .code-display .code{
+    font-size:28px;font-weight:700;letter-spacing:4px;color:var(--accent-2);font-family:var(--mono);
+    text-shadow:0 0 18px rgba(34,211,238,.35);
+  }
+  @keyframes pairPop{from{opacity:0;transform:translateY(4px) scale(.98);}to{opacity:1;transform:none;}}
+  #pairResult .empty{animation:pairPop .2s ease;}
 
   /* ── Logs ────────────────────────────────────────────── */
   .log-filters{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;}
@@ -304,7 +351,7 @@
           <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.5-1.5"/></svg></span>
           Pairing
         </div>
-        <div class="nav-item" data-target="protections">
+        <div class="nav-item admin-only" data-target="protections">
           <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 2 4 5v6c0 5 3.4 9 8 11 4.6-2 8-6 8-11V5l-8-3Z"/></svg></span>
           Protections
         </div>
@@ -388,6 +435,22 @@
 
       <!-- PAIRING -->
       <section class="section active" id="sec-pairing">
+        <div class="pairing-hero">
+          <div class="pairing-hero-top">
+            <div class="pairing-hero-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.5-1.5"/></svg>
+            </div>
+            <div>
+              <h1>Connecte ton WhatsApp</h1>
+              <p>Génère un code de jumelage en quelques secondes et relie ton numéro à Takamura.</p>
+            </div>
+          </div>
+          <div class="pairing-steps">
+            <div class="pairing-step"><div class="num">1</div><div class="txt">Saisis ton numéro WhatsApp avec l'indicatif international, sans + ni espaces.</div></div>
+            <div class="pairing-step"><div class="num">2</div><div class="txt">Clique sur « Générer le code » et récupère ton code unique.</div></div>
+            <div class="pairing-step"><div class="num">3</div><div class="txt">WhatsApp → Appareils liés → Lier un appareil → Lier avec le numéro de téléphone.</div></div>
+          </div>
+        </div>
         <div class="panel">
           <h2>Pairing WhatsApp</h2>
           <div class="desc">Saisis un numéro WhatsApp au format international (sans + ni espaces) pour générer un code de jumelage. Le même code peut aussi être obtenu via <code>/pair</code> sur Telegram.</div>
@@ -998,7 +1061,7 @@
   document.getElementById("logPlatform").addEventListener("change", loadLogs);
 
   // ── Router / refresh ────────────────────────────────────────
-  const ADMIN_SECTIONS = ["dashboard", "sessions", "telegram", "logs"];
+  const ADMIN_SECTIONS = ["dashboard", "sessions", "telegram", "logs", "protections"];
   function loadSection(target){
     if (ADMIN_SECTIONS.includes(target) && !isAdmin()) return;
     if (target === "dashboard") loadDashboard();

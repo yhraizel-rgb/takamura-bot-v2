@@ -1763,14 +1763,14 @@ app.delete("/api/sessions/:number", requireAdmin, async (req, res) => {
 });
 
 // ── Protections / Features ──────────────────────────────────────
-app.get("/api/features/:number", (req, res) => {
+app.get("/api/features/:number", requireAdmin, (req, res) => {
   const number = formatNumber(req.params.number);
   const b = bots.get(number);
   if (!b) return fail(res, "SESSION_NOT_FOUND", "Session introuvable", 404);
   ok(res, b.config);
 });
 
-app.post("/api/features/:number", async (req, res) => {
+app.post("/api/features/:number", requireAdmin, async (req, res) => {
   const number = formatNumber(req.params.number);
   const b = bots.get(number);
   if (!b) return fail(res, "SESSION_NOT_FOUND", "Session introuvable", 404);
