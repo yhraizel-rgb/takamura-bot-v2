@@ -42,7 +42,9 @@ export default {
 
 ╭──❰ *TÉLÉCHARGEMENTS* ❱──╮
 │ ➤ _*img*_
+│ ➤ _*tg-sticker*_
 │ ➤ _*save*_
+│ ➤ _*compress*_
 │ ➤ _*url*_
 │ ➤ _*vv*_
 ╰────────────────────────────╯
