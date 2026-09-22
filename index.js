@@ -419,14 +419,6 @@ const tgStickerCommand = {
       const webpBuffer = await wsSticker.toBuffer();
 
       await sock.sendMessage(ctx.from, { sticker: webpBuffer });
-      // Option "télécharger" : le même sticker renvoyé en document,
-      // ce qui affiche le bouton de téléchargement natif WhatsApp.
-      await sock.sendMessage(ctx.from, {
-        document: webpBuffer,
-        fileName: `sticker-${packName}-${index}.webp`,
-        mimetype: "image/webp",
-        caption: "📥 Sticker converti — fichier téléchargeable"
-      });
     } catch (e) {
       addLog("whatsapp", process.env.NUMBER || "-", "tg-sticker", "error", e.message);
       return ctx.reply(`Conversion du sticker échouée : ${e.message}`);
