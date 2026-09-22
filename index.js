@@ -1973,6 +1973,16 @@ async function startTelegramPolling() {
 
   try {
     telegramState.botInfo = await tgCall("getMe");
+    // Un webhook actif (posé via setWebhook ailleurs — BotFather, ancien
+    // déploiement, etc.) empêche getUpdates ("Conflict: can't use getUpdates
+    // method while webhook is active"). On le supprime systématiquement au
+    // démarrage pour garantir que le polling puisse fonctionner.
+    try {
+      await tgCall("deleteWebhook", { drop_pending_updates: false });
+      addLog("telegram", "-", "start", "info", "Webhook supprimé (mode polling forcé).");
+    } catch (e) {
+      addLog("telegram", "-", "start", "warning", `deleteWebhook a échoué : ${e.message}`);
+    }
     await tgCall("setMyCommands", {
       commands: [
         { command: "start", description: "Menu principal" },
