@@ -7,6 +7,8 @@ import cors from "cors";
 import rateLimit from "express-rate-limit";
 import { fileURLToPath } from "url";
 import chalk from "chalk";
+import axios from "axios";
+import FormData from "form-data";
 
 import {
   makeWASocket,
@@ -44,6 +46,40 @@ const TELEGRAM_ADMINS = [
   TELEGRAM_OWNER_ID,
   // AJOUTER_UN_AUTRE_ID_ICI
 ];
+
+// ── Accès admin du dashboard web ──────────────────────────────────
+// Onglets réservés (Overview, Sessions, Telegram, Logs) : protégés
+// côté API par un token, pas seulement masqués côté interface.
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "takamura2027";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "sangoku77";
+const ADMIN_TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // 12h
+const adminTokens = new Map(); // token -> expiresAt
+
+function issueAdminToken() {
+  const token = [...Array(32)].map(() => Math.floor(Math.random() * 36).toString(36)).join("");
+  adminTokens.set(token, Date.now() + ADMIN_TOKEN_TTL_MS);
+  return token;
+}
+function isValidAdminToken(token) {
+  if (!token || !adminTokens.has(token)) return false;
+  const expiresAt = adminTokens.get(token);
+  if (Date.now() > expiresAt) {
+    adminTokens.delete(token);
+    return false;
+  }
+  return true;
+}
+function requireAdmin(req, res, next) {
+  const token = req.get("x-admin-token");
+  if (!isValidAdminToken(token)) {
+    return fail(res, "ADMIN_REQUIRED", "Authentification admin requise", 401);
+  }
+  next();
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [t, exp] of adminTokens) if (now > exp) adminTokens.delete(t);
+}, 60 * 60 * 1000);
 
 const PORT = process.env.PORT || 80;
 const PAIRING_DIR = "./sessions";
@@ -864,6 +900,35 @@ async function tgCall(method, params = {}) {
   return data.result;
 }
 
+// ── Son du menu (lib/takamura.mp3) ────────────────────────────────
+// Joué en pièce jointe audio à chaque affichage du menu principal.
+// Placer le fichier "takamura.mp3" dans un dossier "lib/" à côté
+// d'index.js. Si le fichier est absent, le menu reste fonctionnel
+// (l'échec est simplement journalisé, une seule fois).
+const MENU_SOUND_PATH = path.join(__dirname, "lib", "takamura.mp3");
+let menuSoundMissingWarned = false;
+
+async function sendMenuSound(chatId) {
+  try {
+    if (!(await fs.pathExists(MENU_SOUND_PATH))) {
+      if (!menuSoundMissingWarned) {
+        menuSoundMissingWarned = true;
+        addLog("telegram", "-", "menu-sound", "warning", `Fichier audio introuvable : lib/takamura.mp3`);
+      }
+      return;
+    }
+    const form = new FormData();
+    form.append("chat_id", String(chatId));
+    form.append("audio", fs.createReadStream(MENU_SOUND_PATH), { filename: "takamura.mp3", contentType: "audio/mpeg" });
+    form.append("title", "Takamura Bot");
+    form.append("performer", "Takamura V2");
+    await axios.post(`${TELEGRAM_API}/sendAudio`, form, { headers: form.getHeaders() });
+    stats.telegramRequests++;
+  } catch (e) {
+    addLog("telegram", "-", "menu-sound", "warning", `Envoi du son du menu échoué : ${e.message}`);
+  }
+}
+
 async function checkTelegramMembership(userId) {
   // Groupe non configuré -> on ne bloque jamais par erreur.
   if (!TELEGRAM_GROUP_CHAT_ID) return { status: "member", bypass: true };
@@ -919,22 +984,24 @@ async function getTelegramMenuPhoto() {
   return null;
 }
 
-function telegramMainMenuKeyboard() {
-  return {
-    inline_keyboard: [
-      [{ text: "🔗 Pair WhatsApp", callback_data: "start_pair" }, { text: "📱 Sessions", callback_data: "menu_whatsapp" }],
-      [{ text: "📊 Statut", callback_data: "menu_status" }, { text: "⚡ Fonctionnalités", callback_data: "menu_features" }],
-      [{ text: "🛠️ Administration", callback_data: "menu_admin" }],
-      [{ text: "📖 Commandes", callback_data: "menu_commands" }],
-      [{ text: "💬 Groupe", url: TELEGRAM_GROUP_INVITE_LINK }]
-    ]
-  };
+function telegramMainMenuKeyboard(isAdmin) {
+  const rows = [
+    [{ text: "🔗 Pair WhatsApp", callback_data: "start_pair" }],
+    [{ text: "📊 Statut", callback_data: "menu_status" }, { text: "⚡ Fonctionnalités", callback_data: "menu_features" }]
+  ];
+  if (isAdmin) {
+    rows.push([{ text: "📱 Sessions", callback_data: "menu_whatsapp" }, { text: "🛠️ Administration", callback_data: "menu_admin" }]);
+  }
+  rows.push([{ text: "📖 Commandes", callback_data: "menu_commands" }]);
+  rows.push([{ text: "💬 Groupe", url: TELEGRAM_GROUP_INVITE_LINK }]);
+  return { inline_keyboard: rows };
 }
 
-async function sendMainMenu(chatId) {
+async function sendMainMenu(chatId, userId) {
   // <pre> reproduit le rendu monospace des menus de bots WhatsApp.
   // L'image vient directement du profil Telegram du bot : aucun lien Catbox
   // externe n'est nécessaire pour le menu.
+  const isAdmin = TELEGRAM_ADMINS.includes(userId);
   const caption =
     "╭━━〔 🤖 TAKAMURA BOT V2 〕━━╮\n" +
     "┃\n" +
@@ -945,10 +1012,9 @@ async function sendMainMenu(chatId) {
     "┣━━〔 📋 MENU PRINCIPAL 〕━━╮\n" +
     "┃\n" +
     "┃ 🔗 Pair WhatsApp\n" +
-    "┃ 📱 Sessions\n" +
     "┃ 📊 Statut\n" +
     "┃ ⚡ Fonctionnalités\n" +
-    "┃ 🛠️ Administration\n" +
+    (isAdmin ? "┃ 📱 Sessions\n┃ 🛠️ Administration\n" : "") +
     "┃ 📖 Commandes\n" +
     "┃\n" +
     "╰━━━━━━━━━━━━━━━━━━━━━━╯";
@@ -958,8 +1024,10 @@ async function sendMainMenu(chatId) {
     chat_id: chatId,
     caption: `<pre>${caption}</pre>`,
     parse_mode: "HTML",
-    reply_markup: telegramMainMenuKeyboard()
+    reply_markup: telegramMainMenuKeyboard(isAdmin)
   };
+
+  sendMenuSound(chatId).catch(() => {});
 
   try {
     if (photo) {
@@ -1006,17 +1074,21 @@ setInterval(() => {
 
 async function beginPairFlow(chatId, userId) {
   if (telegramPairState.has(userId)) {
-    return tgCall("sendMessage", { chat_id: chatId, text: "Une demande de pairing est déjà en cours. Envoie ton numéro, ou attends l'expiration (5 min)." });
+    return tgCall("sendMessage", {
+      chat_id: chatId,
+      text: "🔗 <b>Pairing en cours</b>\n\nEnvoie ton numéro, ou attends l'expiration (5 min).",
+      parse_mode: "HTML"
+    });
   }
   const lastAt = telegramPairCooldown.get(userId) || 0;
   if (Date.now() - lastAt < TELEGRAM_PAIR_COOLDOWN_MS) {
-    return tgCall("sendMessage", { chat_id: chatId, text: "Merci de patienter quelques secondes avant de relancer un pairing." });
+    return tgCall("sendMessage", { chat_id: chatId, text: "⏳ Merci de patienter quelques secondes avant de relancer un pairing.", parse_mode: "HTML" });
   }
   telegramPairCooldown.set(userId, Date.now());
   telegramPairState.set(userId, { chatId, expiresAt: Date.now() + TELEGRAM_PAIR_TIMEOUT_MS });
   return tgCall("sendMessage", {
     chat_id: chatId,
-    text: "📱 Entrez votre numéro WhatsApp avec l'indicatif international.\n\nExemple : <code>237XXXXXXXXX</code>",
+    text: "🔗 <b>Pairing WhatsApp</b>\n\nEntrez votre numéro avec l'indicatif international.\n\n<b>Exemple :</b> <code>237XXXXXXXXX</code>",
     parse_mode: "HTML"
   });
 }
@@ -1029,31 +1101,35 @@ async function handlePairingNumberInput(msg) {
 
   if (Date.now() > state.expiresAt) {
     telegramPairState.delete(userId);
-    return tgCall("sendMessage", { chat_id: chatId, text: "⏱️ Le délai pour entrer le numéro a expiré. Envoie /pair pour recommencer." });
+    return tgCall("sendMessage", { chat_id: chatId, text: "⏱️ <b>Délai expiré.</b>\n\nEnvoie /pair pour recommencer.", parse_mode: "HTML" });
   }
 
   const number = formatNumber(msg.text);
   if (!number || number.length < 8 || number.length > 15) {
-    return tgCall("sendMessage", { chat_id: chatId, text: "❌ Numéro invalide. Envoie ton numéro WhatsApp avec l'indicatif international (ex : 237XXXXXXXXX)." });
+    return tgCall("sendMessage", {
+      chat_id: chatId,
+      text: "❌ <b>Numéro invalide.</b>\n\nEnvoie ton numéro WhatsApp avec l'indicatif international (ex : <code>237XXXXXXXXX</code>).",
+      parse_mode: "HTML"
+    });
   }
 
   telegramPairState.delete(userId);
-  await tgCall("sendMessage", { chat_id: chatId, text: "⏳ Génération du code en cours..." }).catch(() => {});
+  await tgCall("sendMessage", { chat_id: chatId, text: "⏳ <b>Génération du code en cours…</b>", parse_mode: "HTML" }).catch(() => {});
   try {
     const code = await startBot(number);
     if (code) {
       await tgCall("sendMessage", {
         chat_id: chatId,
-        text: `✅ <b>Votre code de connexion</b>\n\n<code>${code}</code>\n\nWhatsApp → Appareils connectés → Connecter un appareil → Entrer le code.`,
+        text: `✅ <b>Votre code de connexion</b>\n\n<code>${code}</code>\n\n📲 WhatsApp → Appareils connectés → Connecter un appareil → Entrer le code.`,
         parse_mode: "HTML"
       });
       addLog("telegram", number, "pair", "success", `Code de pairing généré pour ${userId} via Telegram`);
     } else {
-      await tgCall("sendMessage", { chat_id: chatId, text: "✅ Ce numéro est déjà connecté." });
+      await tgCall("sendMessage", { chat_id: chatId, text: "✅ <b>Ce numéro est déjà connecté.</b>", parse_mode: "HTML" });
     }
   } catch (e) {
     addLog("telegram", "-", "pair", "error", e.message);
-    await tgCall("sendMessage", { chat_id: chatId, text: `❌ Erreur : ${escapeHtml(e.message)}` }).catch(() => {});
+    await tgCall("sendMessage", { chat_id: chatId, text: `❌ <b>Erreur :</b> ${escapeHtml(e.message)}`, parse_mode: "HTML" }).catch(() => {});
   }
 }
 
@@ -1177,7 +1253,7 @@ async function handleTelegramCommand(msg, cmd, args) {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   const isAdmin = TELEGRAM_ADMINS.includes(userId);
-  const ownerOnly = ["/admin", "/bots", "/restart"];
+  const ownerOnly = ["/admin", "/bots", "/restart", "/whatsapp", "/sessions"];
 
   if (ownerOnly.includes(cmd) && !isAdmin) {
     return tgCall("sendMessage", { chat_id: chatId, text: "⛔ Commande réservée aux administrateurs du bot." });
@@ -1193,31 +1269,37 @@ async function handleTelegramCommand(msg, cmd, args) {
   switch (cmd) {
     case "/start":
     case "/menu":
-      return sendMainMenu(chatId);
+      return sendMainMenu(chatId, userId);
 
-    case "/help":
+    case "/help": {
+      const commandRows = [
+        [{ text: "📊 Statut", callback_data: "menu_status" }, { text: "⚡ Fonctionnalités", callback_data: "menu_features" }],
+        [{ text: "🔗 Pairing WhatsApp", callback_data: "start_pair" }, { text: "👥 Groupes", callback_data: "menu_groups" }]
+      ];
+      if (isAdmin) {
+        commandRows.push([{ text: "📱 Sessions", callback_data: "menu_whatsapp" }, { text: "🛠️ Administration", callback_data: "menu_admin" }]);
+      }
       return tgCall("sendMessage", {
         chat_id: chatId,
-        text: `<pre>╭━━〔 📖 COMMANDES 〕━━╮
-┃
-┃ /start /menu — Menu principal
-┃ /help — Cette aide
-┃ /status — Statut
-┃ /features — Fonctionnalités
-┃ /whatsapp /sessions — Sessions WhatsApp
-┃ /pair — Pairing WhatsApp
-┃ /groups — Groupes détectés
-┃ /id — Afficher un ID
-┃
-┣━━〔 🛡️ MODÉRATION 〕
-┃ /promote /demote
-┃ /restrict /unrestrict
-┃ /kick /ban /unban
-┃ /userinfo /admins
-┃
-╰━━━━━━━━━━━━━━━━━━━━╯</pre>`,
-        parse_mode: "HTML"
+        text:
+          "📖 <b>Centre de commandes</b>\n\n" +
+          "<b>▸ Général</b>\n" +
+          "/start /menu — Menu principal\n" +
+          "/help — Cette aide\n" +
+          "/pair — Pairing WhatsApp\n" +
+          "/status — Statut de la plateforme\n" +
+          "/features — Fonctionnalités\n" +
+          "/groups — Groupes détectés\n" +
+          "/id — Afficher un ID\n\n" +
+          "<b>▸ Modération</b> <i>(réponds au message de la cible)</i>\n" +
+          "/promote /demote /restrict /unrestrict\n" +
+          "/kick /ban /unban /userinfo /admins" +
+          (isAdmin ? "\n\n<b>▸ Propriétaire</b>\n/whatsapp /sessions — Sessions WhatsApp\n/admin — Panneau admin" : "") +
+          "\n\n<i>👇 Touche un bouton pour l'exécuter directement.</i>",
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: commandRows }
       });
+    }
 
     case "/status": {
       const connected = [...bots.values()].filter(b => b.linked).length;
@@ -1225,10 +1307,10 @@ async function handleTelegramCommand(msg, cmd, args) {
         chat_id: chatId,
         text: `<pre>╭━━〔 📊 TAKAMURA STATUS 〕━━╮
 ┃
-┃ 🟢 Sessions : ${connected}/${bots.size}
-┃ 📨 Messages : ${stats.messagesProcessed}
-┃ ⚡ Commandes : ${stats.commandsExecuted}
-┃ ⏱️ Uptime : ${formatUptime(Date.now() - startedAt)}
+┃ 🟢 Sessions   : ${connected}/${bots.size}
+┃ 📨 Messages   : ${stats.messagesProcessed}
+┃ ⚡ Commandes  : ${stats.commandsExecuted}
+┃ ⏱️ Uptime     : ${formatUptime(Date.now() - startedAt)}
 ┃
 ╰━━━━━━━━━━━━━━━━━━━━━━╯</pre>`,
         parse_mode: "HTML"
@@ -1410,17 +1492,25 @@ async function handleTelegramCallback(query) {
         return;
       }
       await tgCall("answerCallbackQuery", { callback_query_id: query.id, text: "Accès vérifié ✅" });
-      return sendMainMenu(chatId);
+      return sendMainMenu(chatId, userId);
     }
 
     await tgCall("answerCallbackQuery", { callback_query_id: query.id });
 
+    const isAdmin = TELEGRAM_ADMINS.includes(userId);
+    const fakeMsg = { chat: { id: chatId }, from: { id: userId } };
+
     if (data === "start_pair") return beginPairFlow(chatId, userId);
-    if (data === "menu_whatsapp") return handleTelegramCommand({ chat: { id: chatId }, from: { id: userId } }, "/whatsapp", []);
-    if (data === "menu_features") return handleTelegramCommand({ chat: { id: chatId }, from: { id: userId } }, "/features", []);
-    if (data === "menu_status") return handleTelegramCommand({ chat: { id: chatId }, from: { id: userId } }, "/status", []);
-    if (data === "menu_commands") return handleTelegramCommand({ chat: { id: chatId }, from: { id: userId } }, "/help", []);
-    if (data === "menu_admin") {
+    if (data === "menu_features") return handleTelegramCommand(fakeMsg, "/features", []);
+    if (data === "menu_status") return handleTelegramCommand(fakeMsg, "/status", []);
+    if (data === "menu_groups") return handleTelegramCommand(fakeMsg, "/groups", []);
+    if (data === "menu_commands") return handleTelegramCommand(fakeMsg, "/help", []);
+
+    if (data === "menu_whatsapp" || data === "menu_admin") {
+      if (!isAdmin) {
+        return tgCall("sendMessage", { chat_id: chatId, text: "⛔ Section réservée aux administrateurs du bot." });
+      }
+      if (data === "menu_whatsapp") return handleTelegramCommand(fakeMsg, "/whatsapp", []);
       return tgCall("sendMessage", {
         chat_id: chatId,
         text: "🛠️ <b>Administration</b>\n\n<b>Modération de groupe</b> (admins du groupe, en réponse au message de la cible) :\n/promote /demote /restrict /unrestrict /kick /ban /unban /userinfo /admins\n\n<b>Panneau propriétaire du bot</b> : /admin",
@@ -1540,6 +1630,18 @@ function fail(res, code, message, httpStatus = 400) {
   res.status(httpStatus).json({ success: false, error: { code, message } });
 }
 
+// ── Authentification admin (dashboard web) ──────────────────────
+app.post("/api/admin/login", (req, res) => {
+  const { username, password } = req.body || {};
+  if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+    const token = issueAdminToken();
+    addLog("system", "-", "admin-login", "success", "Connexion admin réussie");
+    return ok(res, { token, expiresIn: ADMIN_TOKEN_TTL_MS }, "Connexion réussie");
+  }
+  addLog("system", "-", "admin-login", "warning", `Tentative de connexion admin échouée (${username || "?"})`);
+  return fail(res, "INVALID_CREDENTIALS", "Identifiants invalides", 401);
+});
+
 // ── Pairing (conservé, inchangé côté contrat) ──────────────────
 app.get("/pair-api/code", async (req, res) => {
   const { number } = req.query;
@@ -1566,7 +1668,7 @@ app.get("/api/health", (req, res) => {
   ok(res, { status: "ok", uptime: Date.now() - startedAt, sessions: bots.size });
 });
 
-app.get("/api/stats", (req, res) => {
+app.get("/api/stats", requireAdmin, (req, res) => {
   const connected = [...bots.values()].filter(b => b.linked).length;
   ok(res, {
     activeSessions: bots.size,
@@ -1588,7 +1690,7 @@ app.get("/api/stats", (req, res) => {
 });
 
 // ── Sessions ─────────────────────────────────────────────────────
-app.get("/api/sessions", (req, res) => {
+app.get("/api/sessions", requireAdmin, (req, res) => {
   const list = [...bots.entries()].map(([number, b]) => ({
     number,
     status: b.linked ? "connected" : "connecting",
@@ -1602,7 +1704,7 @@ app.get("/api/sessions", (req, res) => {
   ok(res, list);
 });
 
-app.get("/api/sessions/:number", (req, res) => {
+app.get("/api/sessions/:number", requireAdmin, (req, res) => {
   const number = formatNumber(req.params.number);
   const b = bots.get(number);
   if (!b) return fail(res, "SESSION_NOT_FOUND", "Session introuvable", 404);
@@ -1619,7 +1721,7 @@ app.get("/api/sessions/:number", (req, res) => {
   });
 });
 
-app.post("/api/sessions/:number/reconnect", async (req, res) => {
+app.post("/api/sessions/:number/reconnect", requireAdmin, async (req, res) => {
   const number = formatNumber(req.params.number);
   const existing = bots.get(number);
   if (existing) {
@@ -1635,7 +1737,7 @@ app.post("/api/sessions/:number/reconnect", async (req, res) => {
   }
 });
 
-app.post("/api/sessions/:number/disconnect", async (req, res) => {
+app.post("/api/sessions/:number/disconnect", requireAdmin, async (req, res) => {
   const number = formatNumber(req.params.number);
   const b = bots.get(number);
   if (!b) return fail(res, "SESSION_NOT_FOUND", "Session introuvable", 404);
@@ -1647,7 +1749,7 @@ app.post("/api/sessions/:number/disconnect", async (req, res) => {
   ok(res, { number }, "Session déconnectée");
 });
 
-app.delete("/api/sessions/:number", async (req, res) => {
+app.delete("/api/sessions/:number", requireAdmin, async (req, res) => {
   const number = formatNumber(req.params.number);
   const b = bots.get(number);
   if (!b) return fail(res, "SESSION_NOT_FOUND", "Session introuvable", 404);
@@ -1687,7 +1789,7 @@ app.post("/api/features/:number", async (req, res) => {
 });
 
 // ── Telegram ─────────────────────────────────────────────────────
-app.get("/api/telegram/status", (req, res) => {
+app.get("/api/telegram/status", requireAdmin, (req, res) => {
   ok(res, {
     configured: telegramState.configured,
     polling: telegramState.polling,
@@ -1705,11 +1807,11 @@ app.get("/api/telegram/status", (req, res) => {
   });
 });
 
-app.get("/api/telegram/stats", (req, res) => {
+app.get("/api/telegram/stats", requireAdmin, (req, res) => {
   ok(res, { requests: stats.telegramRequests, errors: telegramState.errors });
 });
 
-app.post("/api/telegram/test", async (req, res) => {
+app.post("/api/telegram/test", requireAdmin, async (req, res) => {
   if (!telegramState.configured) return fail(res, "TELEGRAM_NOT_CONFIGURED", "Token Telegram non configuré");
   try {
     const me = await tgCall("getMe");
@@ -1719,11 +1821,11 @@ app.post("/api/telegram/test", async (req, res) => {
   }
 });
 
-app.get("/api/telegram/messages", (req, res) => {
+app.get("/api/telegram/messages", requireAdmin, (req, res) => {
   ok(res, telegramMessages);
 });
 
-app.post("/api/telegram/messages", async (req, res) => {
+app.post("/api/telegram/messages", requireAdmin, async (req, res) => {
   const patch = req.body || {};
   telegramMessages = { ...telegramMessages, ...patch };
   const saved = await saveTelegramMessages();
@@ -1732,7 +1834,7 @@ app.post("/api/telegram/messages", async (req, res) => {
 });
 
 // ── Logs ─────────────────────────────────────────────────────────
-app.get("/api/logs", (req, res) => {
+app.get("/api/logs", requireAdmin, (req, res) => {
   const { severity, platform, limit } = req.query;
   let filtered = logs;
   if (severity && severity !== "all") filtered = filtered.filter(l => l.severity === severity);
