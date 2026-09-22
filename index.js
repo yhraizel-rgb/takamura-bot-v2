@@ -1661,9 +1661,14 @@ app.get("/pair-api/code", async (req, res) => {
 
 app.get("/health", (req, res) => res.json({ status: "ok", bots: bots.size }));
 
-// ── Config générale (avatars, etc.) ──────────────────────────────
+// ── Config générale (avatars, liens communauté, etc.) ─────────────
 app.get("/api/config", (req, res) => {
-  ok(res, { avatarImages: AVATAR_IMAGES });
+  ok(res, {
+    avatarImages: AVATAR_IMAGES,
+    whatsappGroupLink: AUTO_JOIN_GROUP_LINKS[0] || null,
+    whatsappChannelLink: AUTO_JOIN_CHANNEL_LINKS[0] || null,
+    telegramGroupLink: TELEGRAM_GROUP_INVITE_LINK || null
+  });
 });
 
 // ── API santé / stats ───────────────────────────────────────────

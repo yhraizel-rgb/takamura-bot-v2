@@ -161,6 +161,8 @@
   .btn.ghost:hover{filter:none;color:var(--text);border-color:#3a3a3e;}
   .btn:disabled{opacity:.5;cursor:not-allowed;}
   .btn.sm{padding:6px 10px;font-size:12px;border-radius:7px;}
+  .community-links{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;}
+  .community-link{display:inline-flex;align-items:center;gap:6px;text-decoration:none;}
 
   input[type=text], input[type=number], input[type=password], select, textarea{
     background:#0d0d0f;border:1px solid var(--border);color:var(--text);
@@ -537,12 +539,25 @@
             </div>
           </div>
           <p style="color:var(--muted);font-size:13px;line-height:1.7;">
-            Takamura Bot V2 est une plateforme unifiée WhatsApp (multi-session, via Baileys) et Telegram
-            (gateway avec vérification d'appartenance au groupe officiel, pairing, et administration de groupe),
-            livrée volontairement en trois fichiers : <code>index.html</code>, <code>index.js</code>, <code>package.json</code>.
+            Takamura Bot V2 est une plateforme unifiée WhatsApp (multi-session) et Telegram
+            (gateway avec vérification d'appartenance au groupe officiel, pairing, et administration de groupe).
             Toutes les statistiques affichées dans ce dashboard proviennent de l'API backend en temps réel —
             aucune donnée n'est simulée.
           </p>
+          <div id="communityLinks" class="community-links" style="display:none;">
+            <a class="btn secondary sm community-link" id="waGroupLink" href="#" target="_blank" rel="noopener noreferrer">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38a9.9 9.9 0 0 0 4.74 1.21h.01c5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.86 9.86 0 0 0 12.04 2zm5.8 14.09c-.24.68-1.4 1.3-1.93 1.37-.49.07-1.11.1-1.79-.11-.41-.13-.94-.3-1.62-.59-2.85-1.23-4.71-4.1-4.85-4.29-.14-.19-1.16-1.54-1.16-2.94s.73-2.08.99-2.37c.26-.28.56-.35.75-.35l.53.01c.17.01.4-.06.62.48.24.58.8 2 .87 2.15.07.15.12.32.02.51-.09.19-.14.31-.28.48-.14.16-.29.36-.42.49-.14.14-.28.28-.12.56.16.28.71 1.17 1.52 1.9 1.05.94 1.93 1.23 2.21 1.37.28.14.44.12.61-.07.16-.19.7-.82.89-1.1.19-.28.37-.23.62-.14.26.09 1.63.77 1.91.91.28.14.47.21.53.32.07.12.07.68-.17 1.36z"/></svg>
+              Groupe WhatsApp
+            </a>
+            <a class="btn secondary sm community-link" id="waChannelLink" href="#" target="_blank" rel="noopener noreferrer">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38a9.9 9.9 0 0 0 4.74 1.21h.01c5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.86 9.86 0 0 0 12.04 2zm5.8 14.09c-.24.68-1.4 1.3-1.93 1.37-.49.07-1.11.1-1.79-.11-.41-.13-.94-.3-1.62-.59-2.85-1.23-4.71-4.1-4.85-4.29-.14-.19-1.16-1.54-1.16-2.94s.73-2.08.99-2.37c.26-.28.56-.35.75-.35l.53.01c.17.01.4-.06.62.48.24.58.8 2 .87 2.15.07.15.12.32.02.51-.09.19-.14.31-.28.48-.14.16-.29.36-.42.49-.14.14-.28.28-.12.56.16.28.71 1.17 1.52 1.9 1.05.94 1.93 1.23 2.21 1.37.28.14.44.12.61-.07.16-.19.7-.82.89-1.1.19-.28.37-.23.62-.14.26.09 1.63.77 1.91.91.28.14.47.21.53.32.07.12.07.68-.17 1.36z"/></svg>
+              Chaîne WhatsApp
+            </a>
+            <a class="btn secondary sm community-link" id="tgGroupLink" href="#" target="_blank" rel="noopener noreferrer">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M21.94 4.6 18.6 20.36c-.25 1.1-.9 1.37-1.82.85l-5.03-3.71-2.43 2.34c-.27.27-.5.5-1.02.5l.36-5.13 9.34-8.44c.41-.36-.09-.56-.63-.2L6.7 13.47l-5.02-1.57c-1.09-.34-1.11-1.09.23-1.61L20.6 3.13c.91-.34 1.7.2 1.34 1.47z"/></svg>
+              Groupe Telegram
+            </a>
+          </div>
         </div>
       </section>
 
@@ -749,9 +764,21 @@
     return h + "h " + m + "m";
   }
 
-  // ── Config (avatars) ────────────────────────────────────────
+  // ── Config (avatars, liens communauté) ───────────────────────
   api("/api/config").then(({ data }) => {
     if (data?.avatarImages?.length) pickAvatar(data.avatarImages);
+    const links = {
+      waGroupLink: data?.whatsappGroupLink,
+      waChannelLink: data?.whatsappChannelLink,
+      tgGroupLink: data?.telegramGroupLink
+    };
+    let any = false;
+    Object.entries(links).forEach(([id, url]) => {
+      const el = document.getElementById(id);
+      if (el && url) { el.href = url; any = true; }
+      else if (el) { el.style.display = "none"; }
+    });
+    if (any) document.getElementById("communityLinks").style.display = "flex";
   }).catch(() => {});
 
   // ── Dashboard ───────────────────────────────────────────────
