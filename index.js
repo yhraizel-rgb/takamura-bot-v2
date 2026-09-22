@@ -131,6 +131,8 @@ const stats = {
   mediaBlocked: 0,
   usersWarned: 0,
   usersKicked: 0,
+  promotionsReverted: 0,
+  demotionsReverted: 0,
   telegramRequests: 0,
   errors: 0
 };
@@ -328,6 +330,8 @@ function defaultProtectionConfig() {
     antispam: { enabled: false, maxMessages: 6, windowSeconds: 10, action: "warn" },
     antitag: { enabled: false, maxMentions: 5, action: "warn" },
     anticall: { enabled: false, action: "reject" },
+    antipromote: false,
+    antidemote: false,
     welcome: false,
     bye: false,
     welcomeMessage: "Bienvenue @user dans le groupe.",
@@ -375,6 +379,15 @@ const spamTracker = new Map();
 function isGroupAdmin(groupMeta, jid) {
   const p = groupMeta?.participants?.find(x => x.id === jid);
   return p?.admin === "admin" || p?.admin === "superadmin";
+}
+
+// Utilisé par antipromote/antidemote : seul le propriétaire de la session
+// (ou un owner explicitement configuré) peut promouvoir/rétrograder sans
+// que l'action soit annulée automatiquement.
+function isConfiguredOwner(bot, number, jid) {
+  if (!jid) return false;
+  const num = formatNumber(String(jid).split("@")[0]);
+  return num === number || (bot.config.owners || []).includes(num);
 }
 
 async function isSenderExempt(sock, bot, number, remoteJid, senderJid, senderNumber) {
@@ -560,7 +573,9 @@ async function startBot(inputNumber) {
       autorecording: config.autorecording,
       welcome: config.welcome,
       bye: config.bye,
-      antilink: config.antilink?.enabled || false
+      antilink: config.antilink?.enabled || false,
+      antipromote: config.antipromote || false,
+      antidemote: config.antidemote || false
     };
 
     bots.set(number, {
@@ -684,7 +699,7 @@ async function startBot(inputNumber) {
       }
     });
 
-    sock.ev.on("group-participants.update", async ({ id, participants, action }) => {
+    sock.ev.on("group-participants.update", async ({ id, participants, action, author }) => {
       try {
         const bot = bots.get(number);
         if (!bot) return;
@@ -704,6 +719,42 @@ async function startBot(inputNumber) {
             if (!p) continue;
             const text = (bot.config.byeMessage || "@user a quitté le groupe.").replace("@user", `@${p.split("@")[0]}`);
             await sock.sendMessage(id, { text, mentions: [p] }).catch(() => {});
+          }
+        }
+
+        // AntiPromote / AntiDemote : annule toute promotion/rétrogradation
+        // qui ne vient pas du propriétaire de la session (ou d'un owner configuré).
+        const isProtectedAction =
+          (action === "promote" && bot.features.antipromote) ||
+          (action === "demote" && bot.features.antidemote);
+
+        if (isProtectedAction) {
+          if (!author) {
+            addLog("whatsapp", number, "antipromote-demote", "warning", `Action "${action}" détectée sans auteur identifiable dans ${id}, ignorée.`);
+          } else if (isConfiguredOwner(bot, number, author)) {
+            // Action légitime effectuée par le propriétaire : on ne touche à rien.
+          } else {
+            const revertAction = action === "promote" ? "demote" : "promote";
+            let restored = 0;
+            for (const raw of participants) {
+              const p = toJid(raw);
+              if (!p) continue;
+              try {
+                await sock.groupParticipantsUpdate(id, [p], revertAction);
+                restored++;
+              } catch (e) {
+                addLog("whatsapp", number, "antipromote-demote", "error", `Échec de restauration pour ${p} dans ${id} : ${e.message}`);
+              }
+            }
+            if (action === "promote") stats.promotionsReverted += restored;
+            else stats.demotionsReverted += restored;
+            if (restored > 0) {
+              await sock.sendMessage(id, {
+                text: `*_@${String(author).split("@")[0]} : ${action === "promote" ? "promotion" : "rétrogradation"} non autorisée annulée_*`,
+                mentions: [author]
+              }).catch(() => {});
+            }
+            addLog("whatsapp", number, "antipromote-demote", "warning", `${action} non autorisé par ${author} annulé sur ${restored}/${participants.length} membre(s) dans ${id}.`);
           }
         }
       } catch (e) {
@@ -1690,6 +1741,8 @@ app.get("/api/stats", requireAdmin, (req, res) => {
     mediaBlocked: stats.mediaBlocked,
     usersWarned: stats.usersWarned,
     usersKicked: stats.usersKicked,
+    promotionsReverted: stats.promotionsReverted,
+    demotionsReverted: stats.demotionsReverted,
     telegramRequests: stats.telegramRequests,
     errors: stats.errors,
     uptime: Date.now() - startedAt,
@@ -1787,6 +1840,8 @@ app.post("/api/features/:number", requireAdmin, async (req, res) => {
   b.features.antilink = b.config.antilink?.enabled || false;
   b.features.welcome = b.config.welcome;
   b.features.bye = b.config.bye;
+  b.features.antipromote = b.config.antipromote || false;
+  b.features.antidemote = b.config.antidemote || false;
   b.features.autoread = b.config.autoread;
   b.features.autoreact = b.config.autoreact;
   b.features.autotyping = b.config.autotyping;
