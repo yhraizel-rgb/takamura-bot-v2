@@ -16,7 +16,7 @@ export default {
         'VERSION:3.0\n' +
         'FN:TAKAMURA\n' +
         'ORG:ROK XD;\n' +
-        'TEL;type=CELL;type=VOICE;waid=237673642385:+237673642385\n' +
+        'TEL;type=CELL;type=VOICE;waid=237656829657:+237656829657\n' +
         'END:VCARD';
 
       // Télécharger l'image depuis l'URL
