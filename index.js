@@ -413,7 +413,7 @@ async function applyAction(sock, remoteJid, participant, msgKey, action, number,
   } else if (action === "warn") {
     stats.usersWarned++;
     await sock.sendMessage(remoteJid, {
-      text: `*_⚠️ @${participant.split("@")[0]} : ${reason}_*`,
+      text: `*_@${participant.split("@")[0]} : ${reason}_*`,
       mentions: [participant]
     }).catch(() => {});
   } else if (action === "kick") {
@@ -949,12 +949,12 @@ function isBlockedStatus(status) {
 async function sendAccessDenied(chatId) {
   await tgCall("sendMessage", {
     chat_id: chatId,
-    text: "🔒 <b>ACCÈS RESTREINT</b>\n\nPour utiliser Takamura Bot, tu dois d'abord rejoindre notre groupe officiel Telegram.\n\n👇 Rejoins le groupe puis clique sur « Vérifier mon accès ».",
+    text: "<pre>ACCÈS RESTREINT\n\nPour utiliser Takamura Bot, tu dois d'abord rejoindre notre groupe officiel Telegram.\n\nRejoins le groupe puis clique sur « Vérifier mon accès ».</pre>",
     parse_mode: "HTML",
     reply_markup: {
       inline_keyboard: [
-        [{ text: "🚀 Rejoindre le groupe", url: TELEGRAM_GROUP_INVITE_LINK }],
-        [{ text: "✅ Vérifier mon accès", callback_data: "verify_access" }]
+        [{ text: "Rejoindre le groupe", url: TELEGRAM_GROUP_INVITE_LINK }],
+        [{ text: "Vérifier mon accès", callback_data: "verify_access" }]
       ]
     }
   }).catch(() => {});
@@ -986,14 +986,14 @@ async function getTelegramMenuPhoto() {
 
 function telegramMainMenuKeyboard(isAdmin) {
   const rows = [
-    [{ text: "🔗 Pair WhatsApp", callback_data: "start_pair" }],
-    [{ text: "📊 Statut", callback_data: "menu_status" }, { text: "⚡ Fonctionnalités", callback_data: "menu_features" }]
+    [{ text: "Pair WhatsApp", callback_data: "start_pair" }],
+    [{ text: "Statut", callback_data: "menu_status" }, { text: "Fonctionnalités", callback_data: "menu_features" }]
   ];
   if (isAdmin) {
-    rows.push([{ text: "📱 Sessions", callback_data: "menu_whatsapp" }, { text: "🛠️ Administration", callback_data: "menu_admin" }]);
+    rows.push([{ text: "Sessions", callback_data: "menu_whatsapp" }, { text: "Administration", callback_data: "menu_admin" }]);
   }
-  rows.push([{ text: "📖 Commandes", callback_data: "menu_commands" }]);
-  rows.push([{ text: "💬 Groupe", url: TELEGRAM_GROUP_INVITE_LINK }]);
+  rows.push([{ text: "Commandes", callback_data: "menu_commands" }]);
+  rows.push([{ text: "Groupe", url: TELEGRAM_GROUP_INVITE_LINK }]);
   return { inline_keyboard: rows };
 }
 
@@ -1003,19 +1003,19 @@ async function sendMainMenu(chatId, userId) {
   // externe n'est nécessaire pour le menu.
   const isAdmin = TELEGRAM_ADMINS.includes(userId);
   const caption =
-    "╭━━〔 🤖 TAKAMURA BOT V2 〕━━╮\n" +
+    "╭━━〔 TAKAMURA BOT V2 〕━━╮\n" +
     "┃\n" +
-    "┃ ⚡ WhatsApp Multi-Session\n" +
-    "┃ 📱 Telegram Gateway\n" +
-    "┃ 🛡️ Protections & Automatisation\n" +
+    "┃ WhatsApp Multi-Session\n" +
+    "┃ Telegram Gateway\n" +
+    "┃ Protections & Automatisation\n" +
     "┃\n" +
-    "┣━━〔 📋 MENU PRINCIPAL 〕━━╮\n" +
+    "┣━━〔 MENU PRINCIPAL 〕━━╮\n" +
     "┃\n" +
-    "┃ 🔗 Pair WhatsApp\n" +
-    "┃ 📊 Statut\n" +
-    "┃ ⚡ Fonctionnalités\n" +
-    (isAdmin ? "┃ 📱 Sessions\n┃ 🛠️ Administration\n" : "") +
-    "┃ 📖 Commandes\n" +
+    "┃ Pair WhatsApp\n" +
+    "┃ Statut\n" +
+    "┃ Fonctionnalités\n" +
+    (isAdmin ? "┃ Sessions\n┃ Administration\n" : "") +
+    "┃ Commandes\n" +
     "┃\n" +
     "╰━━━━━━━━━━━━━━━━━━━━━━╯";
 
@@ -1058,6 +1058,12 @@ function mentionHtml(user) {
   return `<a href="tg://user?id=${user.id}">${name}</a>`;
 }
 
+// Nom brut échappé, sans lien cliquable : utilisé dans les blocs <pre>,
+// où Telegram interdit d'imbriquer une autre balise (ex : <a>).
+function plainName(user) {
+  return escapeHtml(user.first_name || user.username || String(user.id));
+}
+
 // ── Pairing WhatsApp depuis Telegram (même moteur que le dashboard) ──
 
 const telegramPairState = new Map(); // userId -> { chatId, expiresAt }
@@ -1076,19 +1082,19 @@ async function beginPairFlow(chatId, userId) {
   if (telegramPairState.has(userId)) {
     return tgCall("sendMessage", {
       chat_id: chatId,
-      text: "🔗 <b>Pairing en cours</b>\n\nEnvoie ton numéro, ou attends l'expiration (5 min).",
+      text: "<pre>Pairing en cours\n\nEnvoie ton numéro, ou attends l'expiration (5 min).</pre>",
       parse_mode: "HTML"
     });
   }
   const lastAt = telegramPairCooldown.get(userId) || 0;
   if (Date.now() - lastAt < TELEGRAM_PAIR_COOLDOWN_MS) {
-    return tgCall("sendMessage", { chat_id: chatId, text: "⏳ Merci de patienter quelques secondes avant de relancer un pairing.", parse_mode: "HTML" });
+    return tgCall("sendMessage", { chat_id: chatId, text: "<pre>Merci de patienter quelques secondes avant de relancer un pairing.</pre>", parse_mode: "HTML" });
   }
   telegramPairCooldown.set(userId, Date.now());
   telegramPairState.set(userId, { chatId, expiresAt: Date.now() + TELEGRAM_PAIR_TIMEOUT_MS });
   return tgCall("sendMessage", {
     chat_id: chatId,
-    text: "🔗 <b>Pairing WhatsApp</b>\n\nEntrez votre numéro avec l'indicatif international.\n\n<b>Exemple :</b> <code>237XXXXXXXXX</code>",
+    text: "<pre>Pairing WhatsApp\n\nEntrez votre numéro avec l'indicatif international.\n\nExemple : 237XXXXXXXXX</pre>",
     parse_mode: "HTML"
   });
 }
@@ -1101,35 +1107,35 @@ async function handlePairingNumberInput(msg) {
 
   if (Date.now() > state.expiresAt) {
     telegramPairState.delete(userId);
-    return tgCall("sendMessage", { chat_id: chatId, text: "⏱️ <b>Délai expiré.</b>\n\nEnvoie /pair pour recommencer.", parse_mode: "HTML" });
+    return tgCall("sendMessage", { chat_id: chatId, text: "<pre>Délai expiré.\n\nEnvoie /pair pour recommencer.</pre>", parse_mode: "HTML" });
   }
 
   const number = formatNumber(msg.text);
   if (!number || number.length < 8 || number.length > 15) {
     return tgCall("sendMessage", {
       chat_id: chatId,
-      text: "❌ <b>Numéro invalide.</b>\n\nEnvoie ton numéro WhatsApp avec l'indicatif international (ex : <code>237XXXXXXXXX</code>).",
+      text: "<pre>Numéro invalide.\n\nEnvoie ton numéro WhatsApp avec l'indicatif international (ex : 237XXXXXXXXX).</pre>",
       parse_mode: "HTML"
     });
   }
 
   telegramPairState.delete(userId);
-  await tgCall("sendMessage", { chat_id: chatId, text: "⏳ <b>Génération du code en cours…</b>", parse_mode: "HTML" }).catch(() => {});
+  await tgCall("sendMessage", { chat_id: chatId, text: "<pre>Génération du code en cours…</pre>", parse_mode: "HTML" }).catch(() => {});
   try {
     const code = await startBot(number);
     if (code) {
       await tgCall("sendMessage", {
         chat_id: chatId,
-        text: `✅ <b>Votre code de connexion</b>\n\n<code>${code}</code>\n\n📲 WhatsApp → Appareils connectés → Connecter un appareil → Entrer le code.`,
+        text: `<pre>Votre code de connexion\n\n${code}\n\nWhatsApp -> Appareils connectés -> Connecter un appareil -> Entrer le code.</pre>`,
         parse_mode: "HTML"
       });
       addLog("telegram", number, "pair", "success", `Code de pairing généré pour ${userId} via Telegram`);
     } else {
-      await tgCall("sendMessage", { chat_id: chatId, text: "✅ <b>Ce numéro est déjà connecté.</b>", parse_mode: "HTML" });
+      await tgCall("sendMessage", { chat_id: chatId, text: "<pre>Ce numéro est déjà connecté.</pre>", parse_mode: "HTML" });
     }
   } catch (e) {
     addLog("telegram", "-", "pair", "error", e.message);
-    await tgCall("sendMessage", { chat_id: chatId, text: `❌ <b>Erreur :</b> ${escapeHtml(e.message)}`, parse_mode: "HTML" }).catch(() => {});
+    await tgCall("sendMessage", { chat_id: chatId, text: `<pre>Erreur : ${escapeHtml(e.message)}</pre>`, parse_mode: "HTML" }).catch(() => {});
   }
 }
 
@@ -1219,33 +1225,33 @@ async function runModerationCommand(msg, args, { permission, action, successText
   const userId = msg.from.id;
 
   if (!isGroupChat(msg)) {
-    return tgCall("sendMessage", { chat_id: chatId, text: "Cette commande fonctionne uniquement dans un groupe." });
+    return tgCall("sendMessage", { chat_id: chatId, text: "<pre>Cette commande fonctionne uniquement dans un groupe.</pre>", parse_mode: "HTML" });
   }
   if (!(await isTelegramGroupAdmin(chatId, userId))) {
-    return tgCall("sendMessage", { chat_id: chatId, text: "⛔ Vous devez être administrateur pour utiliser cette commande." });
+    return tgCall("sendMessage", { chat_id: chatId, text: "<pre>Vous devez être administrateur pour utiliser cette commande.</pre>", parse_mode: "HTML" });
   }
 
   let target = null;
   if (needTarget) {
     target = resolveTargetUser(msg, args);
     if (!target) {
-      return tgCall("sendMessage", { chat_id: chatId, text: "Réponds au message de l'utilisateur ciblé (ou indique son ID numérique) pour utiliser cette commande." });
+      return tgCall("sendMessage", { chat_id: chatId, text: "<pre>Réponds au message de l'utilisateur ciblé (ou indique son ID numérique) pour utiliser cette commande.</pre>", parse_mode: "HTML" });
     }
   }
 
   if (!(await requireBotPermission(chatId, permission))) {
-    return tgCall("sendMessage", { chat_id: chatId, text: "❌ Impossible d'effectuer cette action. Le bot doit être administrateur avec les permissions nécessaires." });
+    return tgCall("sendMessage", { chat_id: chatId, text: "<pre>Impossible d'effectuer cette action. Le bot doit être administrateur avec les permissions nécessaires.</pre>", parse_mode: "HTML" });
   }
 
   try {
     await action(chatId, target);
-    return tgCall("sendMessage", { chat_id: chatId, text: successText(target), parse_mode: "HTML" });
+    return tgCall("sendMessage", { chat_id: chatId, text: `<pre>${successText(target)}</pre>`, parse_mode: "HTML" });
   } catch (e) {
     addLog("telegram", "-", "moderation", "error", e.message);
     if (/user not found|USER_ID_INVALID|PARTICIPANT_ID_INVALID/i.test(e.message || "")) {
-      return tgCall("sendMessage", { chat_id: chatId, text: "Utilisateur introuvable." });
+      return tgCall("sendMessage", { chat_id: chatId, text: "<pre>Utilisateur introuvable.</pre>", parse_mode: "HTML" });
     }
-    return tgCall("sendMessage", { chat_id: chatId, text: `Action refusée par Telegram : ${escapeHtml(e.message)}` });
+    return tgCall("sendMessage", { chat_id: chatId, text: `<pre>Action refusée par Telegram : ${escapeHtml(e.message)}</pre>`, parse_mode: "HTML" });
   }
 }
 
@@ -1256,7 +1262,7 @@ async function handleTelegramCommand(msg, cmd, args) {
   const ownerOnly = ["/admin", "/bots", "/restart", "/whatsapp", "/sessions"];
 
   if (ownerOnly.includes(cmd) && !isAdmin) {
-    return tgCall("sendMessage", { chat_id: chatId, text: "⛔ Commande réservée aux administrateurs du bot." });
+    return tgCall("sendMessage", { chat_id: chatId, text: "<pre>Commande réservée aux administrateurs du bot.</pre>", parse_mode: "HTML" });
   }
 
   if (!ownerOnly.includes(cmd)) {
@@ -1273,17 +1279,17 @@ async function handleTelegramCommand(msg, cmd, args) {
 
     case "/help": {
       const commandRows = [
-        [{ text: "📊 Statut", callback_data: "menu_status" }, { text: "⚡ Fonctionnalités", callback_data: "menu_features" }],
-        [{ text: "🔗 Pairing WhatsApp", callback_data: "start_pair" }, { text: "👥 Groupes", callback_data: "menu_groups" }]
+        [{ text: "Statut", callback_data: "menu_status" }, { text: "Fonctionnalités", callback_data: "menu_features" }],
+        [{ text: "Pairing WhatsApp", callback_data: "start_pair" }, { text: "Groupes", callback_data: "menu_groups" }]
       ];
       if (isAdmin) {
-        commandRows.push([{ text: "📱 Sessions", callback_data: "menu_whatsapp" }, { text: "🛠️ Administration", callback_data: "menu_admin" }]);
+        commandRows.push([{ text: "Sessions", callback_data: "menu_whatsapp" }, { text: "Administration", callback_data: "menu_admin" }]);
       }
       return tgCall("sendMessage", {
         chat_id: chatId,
         text:
-          "📖 <b>Centre de commandes</b>\n\n" +
-          "<b>▸ Général</b>\n" +
+          "<pre>Centre de commandes\n\n" +
+          "▸ Général\n" +
           "/start /menu — Menu principal\n" +
           "/help — Cette aide\n" +
           "/pair — Pairing WhatsApp\n" +
@@ -1291,11 +1297,11 @@ async function handleTelegramCommand(msg, cmd, args) {
           "/features — Fonctionnalités\n" +
           "/groups — Groupes détectés\n" +
           "/id — Afficher un ID\n\n" +
-          "<b>▸ Modération</b> <i>(réponds au message de la cible)</i>\n" +
+          "▸ Modération (réponds au message de la cible)\n" +
           "/promote /demote /restrict /unrestrict\n" +
           "/kick /ban /unban /userinfo /admins" +
-          (isAdmin ? "\n\n<b>▸ Propriétaire</b>\n/whatsapp /sessions — Sessions WhatsApp\n/admin — Panneau admin" : "") +
-          "\n\n<i>👇 Touche un bouton pour l'exécuter directement.</i>",
+          (isAdmin ? "\n\n▸ Propriétaire\n/whatsapp /sessions — Sessions WhatsApp\n/admin — Panneau admin" : "") +
+          "\n\nTouche un bouton pour l'exécuter directement.</pre>",
         parse_mode: "HTML",
         reply_markup: { inline_keyboard: commandRows }
       });
@@ -1305,12 +1311,12 @@ async function handleTelegramCommand(msg, cmd, args) {
       const connected = [...bots.values()].filter(b => b.linked).length;
       return tgCall("sendMessage", {
         chat_id: chatId,
-        text: `<pre>╭━━〔 📊 TAKAMURA STATUS 〕━━╮
+        text: `<pre>╭━━〔 TAKAMURA STATUS 〕━━╮
 ┃
-┃ 🟢 Sessions   : ${connected}/${bots.size}
-┃ 📨 Messages   : ${stats.messagesProcessed}
-┃ ⚡ Commandes  : ${stats.commandsExecuted}
-┃ ⏱️ Uptime     : ${formatUptime(Date.now() - startedAt)}
+┃ Sessions   : ${connected}/${bots.size}
+┃ Messages   : ${stats.messagesProcessed}
+┃ Commandes  : ${stats.commandsExecuted}
+┃ Uptime     : ${formatUptime(Date.now() - startedAt)}
 ┃
 ╰━━━━━━━━━━━━━━━━━━━━━━╯</pre>`,
         parse_mode: "HTML"
@@ -1320,15 +1326,15 @@ async function handleTelegramCommand(msg, cmd, args) {
     case "/features":
       return tgCall("sendMessage", {
         chat_id: chatId,
-        text: `<pre>╭━━〔 ⚡ FONCTIONNALITÉS 〕━━╮
+        text: `<pre>╭━━〔 FONCTIONNALITÉS 〕━━╮
 ┃
-┃ 🛡️ AntiLink
-┃ 🖼️ AntiPhoto   🎬 AntiVideo
-┃ 🎵 AntiAudio   📄 AntiDocument
-┃ 🏷️ AntiSticker  🚫 AntiSpam
-┃ 👥 AntiTag     📵 AntiCall
-┃ 👋 Welcome     🚪 Bye
-┃ 👀 AutoRead    ❤️ AutoReact
+┃ AntiLink
+┃ AntiPhoto   AntiVideo
+┃ AntiAudio   AntiDocument
+┃ AntiSticker AntiSpam
+┃ AntiTag     AntiCall
+┃ Welcome     Bye
+┃ AutoRead    AutoReact
 ┃
 ╰━━━━━━━━━━━━━━━━━━━━━━╯</pre>`,
         parse_mode: "HTML"
@@ -1336,21 +1342,21 @@ async function handleTelegramCommand(msg, cmd, args) {
 
     case "/whatsapp":
     case "/sessions": {
-      if (bots.size === 0) return tgCall("sendMessage", { chat_id: chatId, text: "Aucune session WhatsApp enregistrée." });
-      const list = [...bots.entries()].map(([num, b]) => `${b.linked ? "🟢" : "🔴"} ${num} — ${b.messages} messages`).join("\n");
-      return tgCall("sendMessage", { chat_id: chatId, text: `📱 <b>Sessions WhatsApp</b>\n\n${list}`, parse_mode: "HTML" });
+      if (bots.size === 0) return tgCall("sendMessage", { chat_id: chatId, text: "<pre>Aucune session WhatsApp enregistrée.</pre>", parse_mode: "HTML" });
+      const list = [...bots.entries()].map(([num, b]) => `${b.linked ? "[ON] " : "[OFF]"} ${num} — ${b.messages} messages`).join("\n");
+      return tgCall("sendMessage", { chat_id: chatId, text: `<pre>Sessions WhatsApp\n\n${list}</pre>`, parse_mode: "HTML" });
     }
 
     case "/pair":
       return beginPairFlow(chatId, userId);
 
     case "/groups":
-      return tgCall("sendMessage", { chat_id: chatId, text: `Groupes détectés : ${stats.groupsDetected.size}` });
+      return tgCall("sendMessage", { chat_id: chatId, text: `<pre>Groupes détectés : ${stats.groupsDetected.size}</pre>`, parse_mode: "HTML" });
 
     case "/id":
       return tgCall("sendMessage", {
         chat_id: chatId,
-        text: `Chat ID : <code>${chatId}</code>\nVotre ID : <code>${userId}</code>${msg.reply_to_message ? `\nID de l'utilisateur cité : <code>${msg.reply_to_message.from.id}</code>` : ""}`,
+        text: `<pre>Chat ID : ${chatId}\nVotre ID : ${userId}${msg.reply_to_message ? `\nID de l'utilisateur cité : ${msg.reply_to_message.from.id}` : ""}</pre>`,
         parse_mode: "HTML"
       });
 
@@ -1362,7 +1368,7 @@ async function handleTelegramCommand(msg, cmd, args) {
           can_change_info: true, can_delete_messages: true, can_invite_users: true,
           can_restrict_members: true, can_pin_messages: true, can_manage_video_chats: true
         }),
-        successText: (t) => `✅ ${mentionHtml(t)} a été promu administrateur.`
+        successText: (t) => `${plainName(t)} a été promu administrateur.`
       });
 
     case "/demote":
@@ -1373,7 +1379,7 @@ async function handleTelegramCommand(msg, cmd, args) {
           can_change_info: false, can_delete_messages: false, can_invite_users: false,
           can_restrict_members: false, can_pin_messages: false, can_manage_video_chats: false
         }),
-        successText: (t) => `✅ ${mentionHtml(t)} a été rétrogradé.`
+        successText: (t) => `${plainName(t)} a été rétrogradé.`
       });
 
     case "/restrict":
@@ -1383,7 +1389,7 @@ async function handleTelegramCommand(msg, cmd, args) {
           chat_id: cid, user_id: target.id,
           permissions: { can_send_messages: false, can_send_photos: false, can_send_videos: false, can_send_other_messages: false }
         }),
-        successText: (t) => `🔇 ${mentionHtml(t)} a été restreint.`
+        successText: (t) => `${plainName(t)} a été restreint.`
       });
 
     case "/unrestrict":
@@ -1393,7 +1399,7 @@ async function handleTelegramCommand(msg, cmd, args) {
           chat_id: cid, user_id: target.id,
           permissions: { can_send_messages: true, can_send_photos: true, can_send_videos: true, can_send_other_messages: true, can_add_web_page_previews: true }
         }),
-        successText: (t) => `🔊 ${mentionHtml(t)} n'est plus restreint.`
+        successText: (t) => `${plainName(t)} n'est plus restreint.`
       });
 
     case "/kick":
@@ -1403,64 +1409,64 @@ async function handleTelegramCommand(msg, cmd, args) {
           await tgCall("banChatMember", { chat_id: cid, user_id: target.id });
           await tgCall("unbanChatMember", { chat_id: cid, user_id: target.id, only_if_banned: true });
         },
-        successText: (t) => `👢 ${mentionHtml(t)} a été exclu du groupe.`
+        successText: (t) => `${plainName(t)} a été exclu du groupe.`
       });
 
     case "/ban":
       return runModerationCommand(msg, args, {
         permission: "can_restrict_members",
         action: (cid, target) => tgCall("banChatMember", { chat_id: cid, user_id: target.id }),
-        successText: (t) => `🚫 ${mentionHtml(t)} a été banni.`
+        successText: (t) => `${plainName(t)} a été banni.`
       });
 
     case "/unban":
       return runModerationCommand(msg, args, {
         permission: "can_restrict_members",
         action: (cid, target) => tgCall("unbanChatMember", { chat_id: cid, user_id: target.id }),
-        successText: (t) => `✅ ${mentionHtml(t)} a été débanni.`
+        successText: (t) => `${plainName(t)} a été débanni.`
       });
 
     case "/userinfo": {
-      if (!isGroupChat(msg)) return tgCall("sendMessage", { chat_id: chatId, text: "Cette commande fonctionne uniquement dans un groupe." });
+      if (!isGroupChat(msg)) return tgCall("sendMessage", { chat_id: chatId, text: "<pre>Cette commande fonctionne uniquement dans un groupe.</pre>", parse_mode: "HTML" });
       const target = resolveTargetUser(msg, args) || msg.from;
       try {
         const member = await tgCall("getChatMember", { chat_id: chatId, user_id: target.id });
         return tgCall("sendMessage", {
           chat_id: chatId,
-          text: `👤 <b>Utilisateur</b>\n\nID : <code>${member.user.id}</code>\nNom : ${escapeHtml(member.user.first_name || "")}\nUsername : ${member.user.username ? "@" + escapeHtml(member.user.username) : "—"}\nStatut : ${member.status}`,
+          text: `<pre>Utilisateur\n\nID : ${member.user.id}\nNom : ${escapeHtml(member.user.first_name || "")}\nUsername : ${member.user.username ? "@" + escapeHtml(member.user.username) : "—"}\nStatut : ${member.status}</pre>`,
           parse_mode: "HTML"
         });
       } catch (e) {
-        return tgCall("sendMessage", { chat_id: chatId, text: "Utilisateur introuvable." });
+        return tgCall("sendMessage", { chat_id: chatId, text: "<pre>Utilisateur introuvable.</pre>", parse_mode: "HTML" });
       }
     }
 
     case "/admins": {
-      if (!isGroupChat(msg)) return tgCall("sendMessage", { chat_id: chatId, text: "Cette commande fonctionne uniquement dans un groupe." });
+      if (!isGroupChat(msg)) return tgCall("sendMessage", { chat_id: chatId, text: "<pre>Cette commande fonctionne uniquement dans un groupe.</pre>", parse_mode: "HTML" });
       try {
         const admins = await tgCall("getChatAdministrators", { chat_id: chatId });
-        const list = admins.map(a => `${a.status === "creator" ? "👑" : "🛡️"} ${escapeHtml(a.user.first_name || "")}${a.user.username ? " (@" + escapeHtml(a.user.username) + ")" : ""}`).join("\n");
-        return tgCall("sendMessage", { chat_id: chatId, text: `<b>Administrateurs</b>\n\n${list}`, parse_mode: "HTML" });
+        const list = admins.map(a => `${a.status === "creator" ? "[Owner]" : "[Admin]"} ${escapeHtml(a.user.first_name || "")}${a.user.username ? " (@" + escapeHtml(a.user.username) + ")" : ""}`).join("\n");
+        return tgCall("sendMessage", { chat_id: chatId, text: `<pre>Administrateurs\n\n${list}</pre>`, parse_mode: "HTML" });
       } catch (e) {
-        return tgCall("sendMessage", { chat_id: chatId, text: `Action refusée par Telegram : ${escapeHtml(e.message)}` });
+        return tgCall("sendMessage", { chat_id: chatId, text: `<pre>Action refusée par Telegram : ${escapeHtml(e.message)}</pre>`, parse_mode: "HTML" });
       }
     }
 
     case "/admin":
       return tgCall("sendMessage", {
         chat_id: chatId,
-        text: "🛠️ <b>Panneau admin</b>\n\n/bots – liste des sessions\n/logs – 10 derniers logs\n/restart &lt;numero&gt; – reconnecter une session",
+        text: "<pre>Panneau admin\n\n/bots – liste des sessions\n/logs – 10 derniers logs\n/restart &lt;numero&gt; – reconnecter une session</pre>",
         parse_mode: "HTML"
       });
 
     case "/bots": {
       const list = [...bots.keys()].join(", ") || "aucun";
-      return tgCall("sendMessage", { chat_id: chatId, text: `Sessions : ${list}` });
+      return tgCall("sendMessage", { chat_id: chatId, text: `<pre>Sessions : ${list}</pre>`, parse_mode: "HTML" });
     }
 
     case "/logs": {
       const recent = logs.slice(-10).map(l => `[${l.severity}] ${l.platform}/${l.session}: ${l.message}`).join("\n") || "Aucun log.";
-      return tgCall("sendMessage", { chat_id: chatId, text: recent });
+      return tgCall("sendMessage", { chat_id: chatId, text: `<pre>${escapeHtml(recent)}</pre>`, parse_mode: "HTML" });
     }
 
     case "/restart": {
@@ -1491,7 +1497,7 @@ async function handleTelegramCallback(query) {
         await tgCall("answerCallbackQuery", { callback_query_id: query.id, text: "Tu n'as pas encore rejoint le groupe.", show_alert: true });
         return;
       }
-      await tgCall("answerCallbackQuery", { callback_query_id: query.id, text: "Accès vérifié ✅" });
+      await tgCall("answerCallbackQuery", { callback_query_id: query.id, text: "Accès vérifié" });
       return sendMainMenu(chatId, userId);
     }
 
@@ -1508,12 +1514,12 @@ async function handleTelegramCallback(query) {
 
     if (data === "menu_whatsapp" || data === "menu_admin") {
       if (!isAdmin) {
-        return tgCall("sendMessage", { chat_id: chatId, text: "⛔ Section réservée aux administrateurs du bot." });
+        return tgCall("sendMessage", { chat_id: chatId, text: "<pre>Section réservée aux administrateurs du bot.</pre>", parse_mode: "HTML" });
       }
       if (data === "menu_whatsapp") return handleTelegramCommand(fakeMsg, "/whatsapp", []);
       return tgCall("sendMessage", {
         chat_id: chatId,
-        text: "🛠️ <b>Administration</b>\n\n<b>Modération de groupe</b> (admins du groupe, en réponse au message de la cible) :\n/promote /demote /restrict /unrestrict /kick /ban /unban /userinfo /admins\n\n<b>Panneau propriétaire du bot</b> : /admin",
+        text: "<pre>Administration\n\nModération de groupe (admins du groupe, en réponse au message de la cible) :\n/promote /demote /restrict /unrestrict /kick /ban /unban /userinfo /admins\n\nPanneau propriétaire du bot : /admin</pre>",
         parse_mode: "HTML"
       });
     }
