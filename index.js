@@ -9,6 +9,7 @@ import { fileURLToPath } from "url";
 import chalk from "chalk";
 import axios from "axios";
 import FormData from "form-data";
+import { spawn } from "child_process";
 import ffmpegPath from "ffmpeg-static";
 import ffmpeg from "fluent-ffmpeg";
 import { Sticker, StickerTypes } from "wa-sticker-formatter";
@@ -353,17 +354,38 @@ async function fetchTelegramFileBuffer(filePath) {
 }
 
 // ── .tg-sticker ─────────────────────────────────────────────────
+// Sans numéro : convertit et envoie TOUT le pack (dans la limite de
+// TG_STICKER_MAX_PACK, pour éviter de flooder WhatsApp avec un pack
+// géant). Avec un numéro précis : ne convertit que ce sticker-là.
+const TG_STICKER_MAX_PACK = 30;
+const TG_STICKER_SEND_DELAY_MS = 700;
+
+async function convertTelegramStickerToWebp(sticker) {
+  const file = await tgCall("getFile", { file_id: sticker.file_id });
+  const buffer = await fetchTelegramFileBuffer(file.file_path);
+  const wsSticker = new Sticker(buffer, {
+    pack: "Takamura Bot",
+    author: "Takamura V2",
+    type: StickerTypes.FULL,
+    quality: 70,
+    background: "transparent"
+  });
+  return wsSticker.toBuffer();
+}
+
 const tgStickerCommand = {
   name: "tg-sticker",
-  description: "Convertit un sticker Telegram (lien du pack) en sticker WhatsApp",
+  description: "Convertit les stickers Telegram d'un pack (lien) en stickers WhatsApp",
   execute: async (sock, ctx, args) => {
     const link = args[0];
+    const hasIndex = args[1] !== undefined;
     const index = Math.max(1, parseInt(args[1], 10) || 1);
 
     if (!link) {
       return ctx.reply(
         "Usage : .tg-sticker <lien du pack Telegram> [numéro]\n" +
-        "Exemple : .tg-sticker https://t.me/addstickers/NomDuPack 1\n" +
+        "Exemple : .tg-sticker https://t.me/addstickers/NomDuPack       → tout le pack\n" +
+        "Exemple : .tg-sticker https://t.me/addstickers/NomDuPack 3     → seulement le sticker #3\n" +
         "Le lien s'obtient en ouvrant un sticker Telegram puis \"Ajouter des stickers\"."
       );
     }
@@ -383,50 +405,74 @@ const tgStickerCommand = {
       return ctx.reply(`Pack Telegram introuvable : ${e.message}`);
     }
 
-    const stickers = set.stickers || [];
-    if (!stickers.length) return ctx.reply("Ce pack ne contient aucun sticker.");
-    const sticker = stickers[Math.min(index, stickers.length) - 1];
+    const allStickers = set.stickers || [];
+    if (!allStickers.length) return ctx.reply("Ce pack ne contient aucun sticker.");
 
-    if (sticker.is_animated) {
+    // Sélection : un seul sticker si un numéro est donné, sinon tout le pack.
+    let targets = hasIndex
+      ? [allStickers[Math.min(index, allStickers.length) - 1]]
+      : allStickers.slice(0, TG_STICKER_MAX_PACK);
+
+    const animatedCount = targets.filter(s => s.is_animated).length;
+    targets = targets.filter(s => !s.is_animated);
+
+    if (!targets.length) {
       return ctx.reply(
-        `Le sticker #${index} est un sticker animé Lottie (.tgs), non convertible pour le moment.\n` +
-        `Le pack contient ${stickers.length} sticker(s) — essaie un autre numéro (idéalement statique ou vidéo).`
+        hasIndex
+          ? `Le sticker #${index} est un sticker animé Lottie (.tgs), non convertible pour le moment.`
+          : "Ce pack ne contient que des stickers animés Lottie (.tgs), non convertibles pour le moment."
       );
     }
 
-    let file;
-    try {
-      file = await tgCall("getFile", { file_id: sticker.file_id });
-    } catch (e) {
-      return ctx.reply(`Impossible de récupérer le fichier Telegram : ${e.message}`);
+    if (!hasIndex) {
+      const truncated = allStickers.length > TG_STICKER_MAX_PACK;
+      let notice = `Conversion de ${targets.length} sticker(s) sur ${allStickers.length}...`;
+      if (animatedCount) notice += ` (${animatedCount} animé(s) ignoré(s))`;
+      if (truncated) notice += `\nLe pack dépasse la limite de ${TG_STICKER_MAX_PACK}, seuls les ${TG_STICKER_MAX_PACK} premiers sont envoyés.`;
+      await ctx.reply(notice);
     }
 
-    let buffer;
-    try {
-      buffer = await fetchTelegramFileBuffer(file.file_path);
-    } catch (e) {
-      return ctx.reply(`Téléchargement du sticker Telegram échoué : ${e.message}`);
+    let sent = 0;
+    let failed = 0;
+    for (const sticker of targets) {
+      try {
+        const webpBuffer = await convertTelegramStickerToWebp(sticker);
+        await sock.sendMessage(ctx.from, { sticker: webpBuffer });
+        sent++;
+      } catch (e) {
+        failed++;
+        addLog("whatsapp", process.env.NUMBER || "-", "tg-sticker", "error", e.message);
+      }
+      if (targets.length > 1) await delay(TG_STICKER_SEND_DELAY_MS);
     }
 
-    try {
-      const wsSticker = new Sticker(buffer, {
-        pack: "Takamura Bot",
-        author: "Takamura V2",
-        type: StickerTypes.FULL,
-        quality: 70,
-        background: "transparent"
-      });
-      const webpBuffer = await wsSticker.toBuffer();
-
-      await sock.sendMessage(ctx.from, { sticker: webpBuffer });
-    } catch (e) {
-      addLog("whatsapp", process.env.NUMBER || "-", "tg-sticker", "error", e.message);
-      return ctx.reply(`Conversion du sticker échouée : ${e.message}`);
+    if (hasIndex && failed) {
+      return ctx.reply(`Conversion du sticker échouée.`);
+    }
+    if (!hasIndex && failed) {
+      return ctx.reply(`Terminé : ${sent} envoyé(s), ${failed} échec(s).`);
     }
   }
 };
 
 // ── .compress ───────────────────────────────────────────────────
+// ffmpeg-static ne fournit que le binaire ffmpeg (pas ffprobe). On récupère
+// donc la durée en lançant `ffmpeg -i <fichier>` et en parsant sa sortie
+// stderr ("Duration: HH:MM:SS.xx"), sans dépendance supplémentaire.
+function probeDurationSeconds(inputPath) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(ffmpegPath, ["-i", inputPath]);
+    let stderr = "";
+    proc.stderr.on("data", (d) => { stderr += d.toString(); });
+    proc.on("error", reject);
+    proc.on("close", () => {
+      const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
+      if (!m) return reject(new Error("Durée de la vidéo introuvable."));
+      resolve(Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]));
+    });
+  });
+}
+
 const COMPRESS_PRESETS = [25, 50, 80];
 
 // Cœur de la compression, partagé entre la commande WhatsApp .compress
@@ -439,10 +485,7 @@ async function compressVideoBuffer(buffer, percent, onProgress) {
     await fs.writeFile(inputPath, buffer);
     const originalSize = buffer.length;
 
-    const probe = await new Promise((resolve, reject) => {
-      ffmpeg.ffprobe(inputPath, (err, data) => (err ? reject(err) : resolve(data)));
-    });
-    const duration = probe.format?.duration || 0;
+    const duration = await probeDurationSeconds(inputPath);
     if (!duration) throw new Error("Durée de la vidéo introuvable.");
 
     // Bitrate cible calculé à partir du bitrate d'origine (taille/durée),
