@@ -17,7 +17,7 @@ export default {
 
     const menuText = `
 ╭─❖───────────────────❖─╮
-   _*TAKAMURA BOT V1*_
+   _*TAKAMURA BOT V2*_
 ╰─❖───────────────────❖─╯
 
 ▸ _*Chat*_        : ${chatType}
@@ -64,6 +64,8 @@ export default {
 ╭──❰ *SÉCURITÉ* ❱──╮
 │ ➤ _*antilink*_
 │ ➤ _*antiphoto*_
+│ ➤ _*antipromote*_
+│ ➤ _*antidemote*_
 │ ➤ _*antivideo*_
 │ ➤ _*antiaudio*_
 │ ➤ _*antidocument*_
@@ -83,6 +85,7 @@ export default {
 
 ╭──❰ *TAGS* ❱──╮
 │ ➤ _*tag*_
+│ ➤ _*tagcreator*_
 │ ➤ _*tagadmin*_
 │ ➤ _*tagall*_
 ╰────────────────────────────╯
