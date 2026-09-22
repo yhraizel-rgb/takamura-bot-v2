@@ -952,6 +952,16 @@
     { key: "anticall", label: "AntiCall", sub: "Rejette les appels entrants", hasAction: false }
   ];
 
+  // Toggles simples : booléen stocké directement à la racine de la config (pas d'objet {enabled, action}).
+  const SIMPLE_DEFS = [
+    { key: "antipromote", label: "AntiPromote", sub: "Annule les promotions admin non autorisées" },
+    { key: "antidemote", label: "AntiDemote", sub: "Annule les rétrogradations admin non autorisées" },
+    { key: "autoread", label: "AutoRead", sub: "Marque automatiquement les messages comme lus" },
+    { key: "autoreact", label: "AutoReact", sub: "Réagit automatiquement aux messages entrants" },
+    { key: "autotyping", label: "AutoTyping", sub: "Affiche \"en train d'écrire…\" dans les groupes" },
+    { key: "autorecording", label: "AutoRecording", sub: "Affiche \"enregistrement audio…\" dans les groupes" }
+  ];
+
   async function populateProtSessions(){
     const select = document.getElementById("protSessionSelect");
     const current = select.value;
@@ -995,7 +1005,14 @@
               </label>
             </div>
           </div>`;
-      }).join("") + `
+      }).join("") + SIMPLE_DEFS.map(def => `
+          <div class="toggle-row">
+            <div class="meta">${def.label}<div class="sub">${def.sub}</div></div>
+            <label class="switch">
+              <input type="checkbox" data-simple-key="${def.key}" ${cfg[def.key] ? 'checked' : ''}>
+              <span class="slider"></span>
+            </label>
+          </div>`).join("") + `
         <div class="toggle-row" style="align-items:flex-start;">
           <div class="meta" style="flex:1;min-width:220px;">
             Welcome<div class="sub">Message de bienvenue à l'arrivée d'un membre — @user est remplacé par sa mention</div>
@@ -1061,6 +1078,9 @@
           const key = el.dataset.key, field = el.dataset.field;
           patch[key] = patch[key] || {};
           patch[key][field] = el.type === "checkbox" ? el.checked : el.value;
+        });
+        body.querySelectorAll("[data-simple-key]").forEach(el => {
+          patch[el.dataset.simpleKey] = el.checked;
         });
         patch.welcome = document.getElementById("protWelcome").checked;
         patch.welcomeMessage = document.getElementById("protWelcomeMessage").value;
