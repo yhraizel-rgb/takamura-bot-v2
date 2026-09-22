@@ -507,7 +507,10 @@
           <div class="desc">Configuration réelle appliquée sur les événements WhatsApp entrants. Sélectionne une session.</div>
           <div style="max-width:320px;margin-bottom:16px;">
             <label>Session</label>
-            <select id="protSessionSelect"><option value="">— Choisir une session —</option></select>
+            <select id="protSessionSelect">
+              <option value="">— Choisir une session —</option>
+              <option value="__all__">🌐 Tous les numéros (connectés + futurs)</option>
+            </select>
           </div>
           <div id="protectionsBody"><div class="empty">Sélectionne une session connectée pour configurer ses protections.</div></div>
         </div>
@@ -951,21 +954,29 @@
 
   async function populateProtSessions(){
     const select = document.getElementById("protSessionSelect");
+    const current = select.value;
     try{
       const { data } = await api("/api/sessions");
       select.innerHTML = '<option value="">— Choisir une session —</option>' +
+        '<option value="__all__">🌐 Tous les numéros (connectés + futurs)</option>' +
         data.map(s => `<option value="${s.number}">${s.number} (${s.status})</option>`).join("");
+      if (current && [...select.options].some(o => o.value === current)) select.value = current;
     } catch(e){}
   }
 
   document.getElementById("protSessionSelect").addEventListener("change", async (e) => {
     const number = e.target.value;
+    const isAll = number === "__all__";
+    const endpoint = isAll ? "/api/features-all" : `/api/features/${number}`;
     const body = document.getElementById("protectionsBody");
     if (!number){ body.innerHTML = '<div class="empty">Sélectionne une session connectée pour configurer ses protections.</div>'; return; }
     body.innerHTML = '<div class="empty">Chargement…</div>';
     try{
-      const { data: cfg } = await api(`/api/features/${number}`);
-      body.innerHTML = PROT_DEFS.map(def => {
+      const { data: cfg } = await api(endpoint);
+      body.innerHTML = (isAll ? `
+        <div class="empty" style="border-style:dashed;text-align:left;margin-bottom:14px;">
+          Réglage global : sert de défaut à chaque nouvelle session qui se connecte, et s'applique immédiatement à toutes les sessions déjà connectées lors de l'enregistrement.
+        </div>` : "") + PROT_DEFS.map(def => {
         const c = cfg[def.key] || {};
         return `
           <div class="toggle-row">
@@ -985,17 +996,63 @@
             </div>
           </div>`;
       }).join("") + `
-        <div class="toggle-row">
-          <div class="meta">Welcome<div class="sub">Message de bienvenue à l'arrivée d'un membre</div></div>
+        <div class="toggle-row" style="align-items:flex-start;">
+          <div class="meta" style="flex:1;min-width:220px;">
+            Welcome<div class="sub">Message de bienvenue à l'arrivée d'un membre — @user est remplacé par sa mention</div>
+            <textarea id="protWelcomeMessage" style="width:100%;margin-top:10px;" placeholder="Bienvenue @user dans le groupe.">${cfg.welcomeMessage || ""}</textarea>
+            <div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <input type="file" id="protWelcomeImageInput" accept="image/*">
+              <img id="protWelcomeImagePreview" src="${cfg.welcomeImage || ""}" style="height:44px;border-radius:8px;border:1px solid var(--border);object-fit:cover;${cfg.welcomeImage ? '' : 'display:none;'}">
+              <button type="button" class="btn ghost sm" id="protWelcomeImageClear" style="${cfg.welcomeImage ? '' : 'display:none;'}">Retirer l'image</button>
+            </div>
+          </div>
           <label class="switch"><input type="checkbox" id="protWelcome" ${cfg.welcome?'checked':''}><span class="slider"></span></label>
         </div>
-        <div class="toggle-row">
-          <div class="meta">Goodbye<div class="sub">Message au départ d'un membre</div></div>
+        <div class="toggle-row" style="align-items:flex-start;">
+          <div class="meta" style="flex:1;min-width:220px;">
+            Goodbye<div class="sub">Message au départ d'un membre — @user est remplacé par sa mention</div>
+            <textarea id="protByeMessage" style="width:100%;margin-top:10px;" placeholder="@user a quitté le groupe.">${cfg.byeMessage || ""}</textarea>
+            <div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <input type="file" id="protByeImageInput" accept="image/*">
+              <img id="protByeImagePreview" src="${cfg.byeImage || ""}" style="height:44px;border-radius:8px;border:1px solid var(--border);object-fit:cover;${cfg.byeImage ? '' : 'display:none;'}">
+              <button type="button" class="btn ghost sm" id="protByeImageClear" style="${cfg.byeImage ? '' : 'display:none;'}">Retirer l'image</button>
+            </div>
+          </div>
           <label class="switch"><input type="checkbox" id="protBye" ${cfg.bye?'checked':''}><span class="slider"></span></label>
         </div>
         <div style="margin-top:16px;text-align:right;">
-          <button class="btn" id="saveProtBtn">Enregistrer</button>
+          <button class="btn" id="saveProtBtn">${isAll ? "Enregistrer et appliquer à tous" : "Enregistrer"}</button>
         </div>`;
+
+      let welcomeImageData = cfg.welcomeImage || "";
+      let byeImageData = cfg.byeImage || "";
+
+      function wireProtImageInput(inputId, previewId, clearId, onChange){
+        const input = document.getElementById(inputId);
+        const preview = document.getElementById(previewId);
+        const clearBtn = document.getElementById(clearId);
+        input.addEventListener("change", () => {
+          const file = input.files && input.files[0];
+          if (!file) return;
+          if (file.size > 5 * 1024 * 1024){ toast("Image trop lourde (max 5 Mo)", "error"); input.value = ""; return; }
+          const reader = new FileReader();
+          reader.onload = () => {
+            onChange(reader.result);
+            preview.src = reader.result;
+            preview.style.display = "";
+            clearBtn.style.display = "";
+          };
+          reader.readAsDataURL(file);
+        });
+        clearBtn.addEventListener("click", () => {
+          onChange("");
+          input.value = "";
+          preview.style.display = "none";
+          clearBtn.style.display = "none";
+        });
+      }
+      wireProtImageInput("protWelcomeImageInput", "protWelcomeImagePreview", "protWelcomeImageClear", v => welcomeImageData = v);
+      wireProtImageInput("protByeImageInput", "protByeImagePreview", "protByeImageClear", v => byeImageData = v);
 
       document.getElementById("saveProtBtn").addEventListener("click", async () => {
         const patch = {};
@@ -1006,14 +1063,18 @@
           patch[key][field] = el.type === "checkbox" ? el.checked : el.value;
         });
         patch.welcome = document.getElementById("protWelcome").checked;
+        patch.welcomeMessage = document.getElementById("protWelcomeMessage").value;
+        patch.welcomeImage = welcomeImageData;
         patch.bye = document.getElementById("protBye").checked;
+        patch.byeMessage = document.getElementById("protByeMessage").value;
+        patch.byeImage = byeImageData;
         try{
-          await api(`/api/features/${number}`, { method: "POST", body: JSON.stringify(patch) });
-          toast("Configuration enregistrée", "success");
+          const { message } = await api(endpoint, { method: "POST", body: JSON.stringify(patch) });
+          toast(message || (isAll ? "Configuration globale enregistrée" : "Configuration enregistrée"), "success");
         } catch(e){}
       });
     } catch(e){
-      body.innerHTML = '<div class="empty">Impossible de charger cette session.</div>';
+      body.innerHTML = '<div class="empty">Impossible de charger cette configuration.</div>';
     }
   });
 

@@ -209,6 +209,22 @@ function escapeHtml(str) {
   return String(str ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
+// Envoie un message de groupe (welcome/bye WhatsApp) avec image optionnelle.
+// `imageDataUrl` est une data URL base64 ("data:image/...;base64,...") ou une chaîne vide.
+async function sendGroupAnnouncement(sock, jid, text, imageDataUrl, mentions) {
+  try {
+    const match = typeof imageDataUrl === "string" && imageDataUrl.match(/^data:image\/[a-zA-Z0-9+.-]+;base64,(.+)$/);
+    if (match) {
+      const buffer = Buffer.from(match[1], "base64");
+      await sock.sendMessage(jid, { image: buffer, caption: text, mentions });
+    } else {
+      await sock.sendMessage(jid, { text, mentions });
+    }
+  } catch (e) {
+    // silencieux, cohérent avec le comportement précédent (.catch(() => {}))
+  }
+}
+
 async function removeSession(dir) {
   if (await fs.pathExists(dir)) await fs.remove(dir);
 }
@@ -335,7 +351,9 @@ function defaultProtectionConfig() {
     welcome: false,
     bye: false,
     welcomeMessage: "Bienvenue @user dans le groupe.",
+    welcomeImage: "",
     byeMessage: "@user a quitté le groupe.",
+    byeImage: "",
     autoread: false,
     autoreact: false,
     autotyping: false,
@@ -347,9 +365,40 @@ function protectionConfigPath(sessionDir) {
   return path.join(sessionDir, "protection.json");
 }
 
+// Config par défaut "globale" — sert de base à toute nouvelle session,
+// et peut être appliquée d'un coup à toutes les sessions déjà connectées.
+// Stockée en fichier (pas un dossier) directement sous PAIRING_DIR, donc
+// countSessions() (qui ne compte que les dossiers) ne la voit pas comme une session.
+const GLOBAL_PROTECTION_PATH = path.join(PAIRING_DIR, "_global-protection.json");
+
+async function loadGlobalProtectionDefaults() {
+  const base = defaultProtectionConfig();
+  try {
+    await fs.ensureDir(PAIRING_DIR);
+    if (await fs.pathExists(GLOBAL_PROTECTION_PATH)) {
+      const saved = await fs.readJson(GLOBAL_PROTECTION_PATH);
+      return { ...base, ...saved };
+    }
+  } catch (e) {
+    addLog("system", "-", "config", "error", `Lecture config globale: ${e.message}`);
+  }
+  return base;
+}
+
+async function saveGlobalProtectionDefaults(cfg) {
+  try {
+    await fs.ensureDir(PAIRING_DIR);
+    await fs.writeJson(GLOBAL_PROTECTION_PATH, cfg, { spaces: 2 });
+    return true;
+  } catch (e) {
+    addLog("system", "-", "config", "error", `Écriture config globale: ${e.message}`);
+    return false;
+  }
+}
+
 async function loadProtectionConfig(sessionDir) {
   const file = protectionConfigPath(sessionDir);
-  const defaults = defaultProtectionConfig();
+  const defaults = await loadGlobalProtectionDefaults();
   try {
     if (await fs.pathExists(file)) {
       const saved = await fs.readJson(file);
@@ -710,7 +759,7 @@ async function startBot(inputNumber) {
             const p = toJid(raw);
             if (!p) continue;
             const text = (bot.config.welcomeMessage || "Bienvenue @user dans le groupe.").replace("@user", `@${p.split("@")[0]}`);
-            await sock.sendMessage(id, { text, mentions: [p] }).catch(() => {});
+            await sendGroupAnnouncement(sock, id, text, bot.config.welcomeImage, [p]);
           }
         }
         if (action === "remove" && bot.features.bye) {
@@ -718,7 +767,7 @@ async function startBot(inputNumber) {
             const p = toJid(raw);
             if (!p) continue;
             const text = (bot.config.byeMessage || "@user a quitté le groupe.").replace("@user", `@${p.split("@")[0]}`);
-            await sock.sendMessage(id, { text, mentions: [p] }).catch(() => {});
+            await sendGroupAnnouncement(sock, id, text, bot.config.byeImage, [p]);
           }
         }
 
@@ -1667,8 +1716,9 @@ async function startTelegramPolling() {
 
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Limite relevée pour accepter les images welcome/bye envoyées en base64.
+app.use(express.json({ limit: "12mb" }));
+app.use(express.urlencoded({ extended: true, limit: "12mb" }));
 
 const apiLimiter = rateLimit({ windowMs: 60 * 1000, max: 120, standardHeaders: true, legacyHeaders: false });
 app.use("/api", apiLimiter);
@@ -1824,6 +1874,21 @@ app.delete("/api/sessions/:number", requireAdmin, async (req, res) => {
 });
 
 // ── Protections / Features ──────────────────────────────────────
+
+// Resynchronise le cache rapide `bot.features` à partir de `bot.config`
+// (utilisé par le moteur WhatsApp) après application d'un patch.
+function syncFeaturesFromConfig(b) {
+  b.features.antilink = b.config.antilink?.enabled || false;
+  b.features.welcome = b.config.welcome;
+  b.features.bye = b.config.bye;
+  b.features.antipromote = b.config.antipromote || false;
+  b.features.antidemote = b.config.antidemote || false;
+  b.features.autoread = b.config.autoread;
+  b.features.autoreact = b.config.autoreact;
+  b.features.autotyping = b.config.autotyping;
+  b.features.autorecording = b.config.autorecording;
+}
+
 app.get("/api/features/:number", requireAdmin, (req, res) => {
   const number = formatNumber(req.params.number);
   const b = bots.get(number);
@@ -1837,18 +1902,36 @@ app.post("/api/features/:number", requireAdmin, async (req, res) => {
   if (!b) return fail(res, "SESSION_NOT_FOUND", "Session introuvable", 404);
   const patch = req.body || {};
   b.config = { ...b.config, ...patch };
-  b.features.antilink = b.config.antilink?.enabled || false;
-  b.features.welcome = b.config.welcome;
-  b.features.bye = b.config.bye;
-  b.features.antipromote = b.config.antipromote || false;
-  b.features.antidemote = b.config.antidemote || false;
-  b.features.autoread = b.config.autoread;
-  b.features.autoreact = b.config.autoreact;
-  b.features.autotyping = b.config.autotyping;
-  b.features.autorecording = b.config.autorecording;
+  syncFeaturesFromConfig(b);
   const saved = await saveProtectionConfig(number);
   addLog("whatsapp", number, "config", "info", "Configuration mise à jour via API");
   ok(res, b.config, saved ? "Configuration enregistrée" : "Configuration mise à jour (non persistée)");
+});
+
+// Config "tous les numéros" : sert de défaut pour toute session future,
+// et peut être appliquée en un clic à toutes les sessions déjà connectées.
+app.get("/api/features-all", requireAdmin, async (req, res) => {
+  const defaults = await loadGlobalProtectionDefaults();
+  ok(res, defaults);
+});
+
+app.post("/api/features-all", requireAdmin, async (req, res) => {
+  const patch = req.body || {};
+  const merged = { ...(await loadGlobalProtectionDefaults()), ...patch };
+  const savedGlobal = await saveGlobalProtectionDefaults(merged);
+
+  let appliedCount = 0;
+  for (const [number, b] of bots.entries()) {
+    b.config = { ...b.config, ...patch };
+    syncFeaturesFromConfig(b);
+    await saveProtectionConfig(number);
+    appliedCount++;
+  }
+
+  addLog("whatsapp", "-", "config", "info", `Configuration globale mise à jour via API (${appliedCount} session(s) connectée(s) impactée(s))`);
+  ok(res, merged, savedGlobal
+    ? `Défaut global enregistré et appliqué à ${appliedCount} session(s) connectée(s)`
+    : "Configuration appliquée aux sessions connectées (non persistée comme défaut global)");
 });
 
 // ── Telegram ─────────────────────────────────────────────────────
