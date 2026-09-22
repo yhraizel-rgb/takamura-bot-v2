@@ -61,6 +61,18 @@ export default {
 │ ➤ _*bye*_
 ╰────────────────────────────╯
 
+╭──❰ *SÉCURITÉ* ❱──╮
+│ ➤ _*antilink*_
+│ ➤ _*antiphoto*_
+│ ➤ _*antivideo*_
+│ ➤ _*antiaudio*_
+│ ➤ _*antidocument*_
+│ ➤ _*antisticker*_
+│ ➤ _*antispam*_
+│ ➤ _*antitag*_
+│ ➤ _*anticall*_
+╰────────────────────────────╯
+
 ╭──❰ *MEDIA* ❱──╮
 │ ➤ _*photo*_
 │ ➤ _*setpp*_
