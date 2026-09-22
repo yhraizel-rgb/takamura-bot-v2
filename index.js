@@ -1288,7 +1288,7 @@ async function handleTelegramCommand(msg, cmd, args) {
       return tgCall("sendMessage", {
         chat_id: chatId,
         text:
-          "<pre>Centre de commandes\n\n" +
+          "Centre de commandes\n\n" +
           "▸ Général\n" +
           "/start /menu — Menu principal\n" +
           "/help — Cette aide\n" +
@@ -1301,8 +1301,7 @@ async function handleTelegramCommand(msg, cmd, args) {
           "/promote /demote /restrict /unrestrict\n" +
           "/kick /ban /unban /userinfo /admins" +
           (isAdmin ? "\n\n▸ Propriétaire\n/whatsapp /sessions — Sessions WhatsApp\n/admin — Panneau admin" : "") +
-          "\n\nTouche un bouton pour l'exécuter directement.</pre>",
-        parse_mode: "HTML",
+          "\n\nTouche un bouton ou une commande pour l'exécuter directement.",
         reply_markup: { inline_keyboard: commandRows }
       });
     }
@@ -1455,8 +1454,7 @@ async function handleTelegramCommand(msg, cmd, args) {
     case "/admin":
       return tgCall("sendMessage", {
         chat_id: chatId,
-        text: "<pre>Panneau admin\n\n/bots – liste des sessions\n/logs – 10 derniers logs\n/restart &lt;numero&gt; – reconnecter une session</pre>",
-        parse_mode: "HTML"
+        text: "Panneau admin\n\n/bots – liste des sessions\n/logs – 10 derniers logs\n/restart <numero> – reconnecter une session"
       });
 
     case "/bots": {
@@ -1519,8 +1517,7 @@ async function handleTelegramCallback(query) {
       if (data === "menu_whatsapp") return handleTelegramCommand(fakeMsg, "/whatsapp", []);
       return tgCall("sendMessage", {
         chat_id: chatId,
-        text: "<pre>Administration\n\nModération de groupe (admins du groupe, en réponse au message de la cible) :\n/promote /demote /restrict /unrestrict /kick /ban /unban /userinfo /admins\n\nPanneau propriétaire du bot : /admin</pre>",
-        parse_mode: "HTML"
+        text: "Administration\n\nModération de groupe (admins du groupe, en réponse au message de la cible) :\n/promote /demote /restrict /unrestrict /kick /ban /unban /userinfo /admins\n\nPanneau propriétaire du bot : /admin"
       });
     }
   } catch (e) {
