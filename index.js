@@ -44,7 +44,7 @@ const TELEGRAM_GROUP_INVITE_LINK = "https://t.me/+xYpA7fGQ3mxkYWE0";
 const TELEGRAM_OWNER_ID = 5913761990;
 const TELEGRAM_ADMINS = [
   TELEGRAM_OWNER_ID,
-  // AJOUTER_UN_AUTRE_ID_ICI
+  8273777091
 ];
 
 // ── Accès admin du dashboard web ──────────────────────────────────
