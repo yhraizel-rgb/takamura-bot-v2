@@ -2335,6 +2335,58 @@ app.get("/api/logs", requireAdmin, (req, res) => {
   ok(res, filtered.slice(-(Number(limit) || 100)).reverse());
 });
 
+// ── Dames en ligne (app Android — salons "Créer" / "Rejoindre") ──
+// Indépendant du bot WhatsApp/Telegram : aucun token admin requis,
+// stockage en mémoire, salons expirés après 2h d'inactivité.
+const checkersRooms = new Map();
+const CHECKERS_ROOM_TTL_MS = 2 * 60 * 60 * 1000;
+setInterval(() => {
+  const now = Date.now();
+  for (const [code, room] of checkersRooms) {
+    if (now - room.createdAt > CHECKERS_ROOM_TTL_MS) checkersRooms.delete(code);
+  }
+}, 10 * 60 * 1000);
+
+function generateCheckersCode() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // sans O/0/I/1
+  let code;
+  do {
+    code = Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+  } while (checkersRooms.has(code));
+  return code;
+}
+
+app.post("/api/games/checkers/rooms", (req, res) => {
+  const rules = req.body?.rules;
+  if (!rules) return fail(res, "MISSING_RULES", "Règles manquantes", 400);
+  const code = generateCheckersCode();
+  checkersRooms.set(code, { rules, board: null, status: "waiting", winner: null, createdAt: Date.now() });
+  ok(res, { code, youAre: "WHITE" });
+});
+
+app.post("/api/games/checkers/rooms/:code/join", (req, res) => {
+  const room = checkersRooms.get(req.params.code);
+  if (!room) return fail(res, "ROOM_NOT_FOUND", "Salon introuvable", 404);
+  if (room.status !== "waiting") return fail(res, "ROOM_FULL", "Salon déjà complet", 409);
+  room.status = "playing";
+  ok(res, { youAre: "BLACK", rules: room.rules });
+});
+
+app.get("/api/games/checkers/rooms/:code", (req, res) => {
+  const room = checkersRooms.get(req.params.code);
+  if (!room) return fail(res, "ROOM_NOT_FOUND", "Salon introuvable", 404);
+  ok(res, { status: room.status, board: room.board, rules: room.rules, winner: room.winner });
+});
+
+app.post("/api/games/checkers/rooms/:code/move", (req, res) => {
+  const room = checkersRooms.get(req.params.code);
+  if (!room) return fail(res, "ROOM_NOT_FOUND", "Salon introuvable", 404);
+  const board = req.body?.board;
+  if (!board) return fail(res, "MISSING_BOARD", "État du plateau manquant", 400);
+  room.board = board;
+  ok(res, {});
+});
+
 // ── 404 API propre (aucune stack trace) ─────────────────────────
 app.use("/api", (req, res) => fail(res, "NOT_FOUND", "Route inconnue", 404));
 app.use((err, req, res, next) => {
