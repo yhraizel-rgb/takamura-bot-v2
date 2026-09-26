@@ -194,6 +194,31 @@ process.on("unhandledRejection", (reason) => {
     console.error(chalk.red(`[FATAL] Rejet de promesse non géré : ${message}`));
   }
 });
+// Avertissements Node (ex. fuite de listeners) : simplement journalisés,
+// jamais fatals, pour garder une trace sans jamais interrompre le process.
+process.on("warning", (warning) => {
+  try {
+    addLog("system", "-", "warning", "warning", warning?.stack || String(warning));
+  } catch {
+    console.warn(chalk.yellow(`[WARNING] ${warning}`));
+  }
+});
+// Arrêt propre sur SIGTERM/SIGINT (ex. redéploiement, docker stop, Ctrl+C) :
+// on journalise puis on quitte proprement au lieu de laisser le process
+// se faire tuer brutalement sans trace dans les logs applicatifs.
+let shuttingDown = false;
+function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try {
+    addLog("system", "-", "shutdown", "warning", `Signal ${signal} reçu, arrêt du serveur...`);
+  } catch {
+    console.warn(chalk.yellow(`[SYSTEM] Signal ${signal} reçu, arrêt du serveur...`));
+  }
+  setTimeout(() => process.exit(0), 250).unref();
+}
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
 // Compat : demoteall.js / promoteall.js s'attendent à `global.bots` /
 // `global.owners`, comme dans un bot mono-session, avec des JID complets.
@@ -907,7 +932,11 @@ async function startBot(inputNumber, options = {}) {
       printQRInTerminal: false
     });
 
-    sock.ev.on("creds.update", saveCreds);
+    sock.ev.on("creds.update", () => {
+      Promise.resolve(saveCreds()).catch(e =>
+        addLog("whatsapp", number, "creds.update", "error", e?.message || String(e))
+      );
+    });
 
     const commands = await loadCommands();
     // Commandes ajoutées directement dans index.js (voir plus haut) :
@@ -2394,7 +2423,14 @@ app.use((err, req, res, next) => {
   fail(res, "INTERNAL_ERROR", "Erreur interne", 500);
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   addLog("system", "-", "server", "success", `Serveur prêt sur le port ${PORT}`);
   startTelegramPolling();
+});
+server.on("error", (e) => {
+  if (e.code === "EADDRINUSE") {
+    addLog("system", "-", "server", "error", `Le port ${PORT} est déjà utilisé. Le serveur ne peut pas démarrer.`);
+  } else {
+    addLog("system", "-", "server", "error", `Erreur de démarrage du serveur : ${e.message}`);
+  }
 });
